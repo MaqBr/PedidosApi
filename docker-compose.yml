@@ -1,0 +1,71 @@
+# ============================================================
+#  PedidosApi — Docker Compose base (local / Development)
+#
+#  Usa Azure SQL Edge em vez de SQL Server 2022 porque:
+#    - SQL Server 2022 só tem imagem AMD64 (roda via emulação
+#      lenta e instável no Apple Silicon / ARM64)
+#    - Azure SQL Edge tem suporte nativo a ARM64 e AMD64
+#    - Compatível com T-SQL e connection strings idênticas
+#
+#  Uso:
+#    cp .env.example .env          # preencha SQL_SA_PASSWORD
+#    docker compose up --build
+#
+#  O docker-compose.override.yml é carregado automaticamente
+#  e seus valores sobrepõem este arquivo (gitignored).
+# ============================================================
+
+services:
+
+  # ── API ────────────────────────────────────────────────────
+  pedidos-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: pedidosapi:local
+    container_name: pedidos-api-dev
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_URLS=http://+:8080
+
+      # Connection string apontando para o container sqlserver abaixo.
+      # Em Azure Web App Container, este valor é substituído pela variável
+      # injetada em Configuração → Cadeias de conexão (SQLCONNSTR_DefaultConnection).
+      - ConnectionStrings__DefaultConnection=Server=sqlserver,1433;Initial Catalog=pedidos-db-dev;User ID=sa;Password=${SQL_SA_PASSWORD};Encrypt=False;TrustServerCertificate=True;Connection Timeout=30;
+
+      # Feature flags ligadas para facilitar o desenvolvimento local
+      - FeatureManagement__DescontoPremium=true
+      - FeatureManagement__DescontoProgressivo=true
+      - FeatureManagement__NovoCalculoFrete=true
+    ports:
+      - "5010:8080"
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Azure SQL Edge (ARM64 nativo) ──────────────────────────
+  # Substitui SQL Server 2022 no desenvolvimento local em Apple Silicon.
+  # Compatível com T-SQL; connection string idêntica ao SQL Server.
+  sqlserver:
+    image: mcr.microsoft.com/azure-sql-edge:latest
+    container_name: pedidos-sqlserver-dev
+    environment:
+      - ACCEPT_EULA=1
+      - MSSQL_SA_PASSWORD=${SQL_SA_PASSWORD}
+    ports:
+      - "1433:1433"
+    volumes:
+      - sqlserver-data:/var/opt/mssql
+    healthcheck:
+      # sqlcmd não está incluso na imagem Azure SQL Edge;
+      # verifica se a porta 1433 está aceitando conexões TCP.
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/localhost/1433"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+    restart: unless-stopped
+
+volumes:
+  sqlserver-data:

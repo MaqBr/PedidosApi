@@ -25,11 +25,11 @@ RUN dotnet publish PedidosApi.csproj \
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
 
-# Usuário não-root por boas práticas de segurança
-RUN adduser --disabled-password --gecos "" appuser && chown -R appuser /app
-USER appuser
-
 COPY --from=build /app/publish .
+
+# Usuário não-root (UID 1000) — imagem mínima não inclui adduser,
+# USER numérico não requer criação prévia do usuário no OS.
+USER 1000
 
 # ASP.NET Core 8+ usa porta 8080 por padrão (não-root friendly)
 EXPOSE 8080
