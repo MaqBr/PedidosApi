@@ -8,6 +8,11 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
+# Versão injetada pelo pipeline via --build-arg.
+# Defaults para desenvolvimento local sem pipeline.
+ARG VERSION=0.0.0
+ARG ASSEMBLY_VERSION=0.0.0
+
 # Restaura dependências antes de copiar o restante (otimiza cache)
 COPY PedidosApi.csproj ./
 RUN dotnet restore PedidosApi.csproj
@@ -15,11 +20,16 @@ RUN dotnet restore PedidosApi.csproj
 # Copia o código-fonte (excluindo o que está no .dockerignore)
 COPY . .
 
-# Publica a aplicação em modo Release
+# Publica com a versão recebida via build args
 RUN dotnet publish PedidosApi.csproj \
     --configuration Release \
     --output /app/publish \
-    --no-restore
+    --no-restore \
+    -p:Version=${ASSEMBLY_VERSION} \
+    -p:AssemblyVersion=${ASSEMBLY_VERSION} \
+    -p:FileVersion=${ASSEMBLY_VERSION} \
+    -p:InformationalVersion=${VERSION} \
+    -p:IncludeSourceRevisionInInformationalVersion=false
 
 # ── Estágio 2: Runtime ───────────────────────────────────────
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
