@@ -2,16 +2,12 @@
 #  PedidosApi — Docker Compose override (pessoal, gitignored)
 #
 #  INSTRUÇÃO:
-#    1. cp docker-compose.override.yml.example docker-compose.override.yml
-#    2. Crie um arquivo .env na raiz com:
-#         SQL_SA_PASSWORD=MinhaS3nhaLocal!
-#       (o compose.yml referencia ${SQL_SA_PASSWORD} automaticamente
-#        a partir do .env ou da variável de shell)
+#    cp docker-compose.override.yml.example docker-compose.override.yml
+#    NUNCA commite o arquivo gerado.
 #
 #  Este arquivo é carregado automaticamente pelo Docker Compose
-#  e sobrepõe docker-compose.yml. NUNCA commite o arquivo gerado.
-#
-#  Use-o para: trocar porta, senha, montar volumes extras, etc.
+#  e sobrepõe docker-compose.yml.
+#  Use-o para: trocar porta, sobrescrever variáveis, etc.
 # ============================================================
 
 services:
@@ -21,11 +17,6 @@ services:
     ports:
       - "5010:8080"
 
-    # Descomente para sobrescrever feature flags individualmente
+    # Descomente para sobrescrever variáveis individualmente
     # environment:
     #   - FeatureManagement__NovoCalculoFrete=false
-
-  sqlserver:
-    # Porta alternativa — útil se 1433 já estiver em uso
-    ports:
-      - "1433:1433"

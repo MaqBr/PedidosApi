@@ -26,17 +26,13 @@ services:
     image: pedidosapi:rc
     container_name: pedidos-api-rc
     environment:
-      # ── ASP.NET Core ──────────────────────────────────────────────
       - ASPNETCORE_ENVIRONMENT=RC
       - ASPNETCORE_URLS=http://+:8080
 
-      # ── Connection String ─────────────────────────────────────────
-      # Azure Web App (Container): definido em Configuração → Cadeias de conexão
-      #   Tipo  : SQLServer  →  injetado como SQLCONNSTR_DefaultConnection
-      #   Também aceito como ConnectionStrings__DefaultConnection (formato abaixo)
+      # Connection string ilustrativa — em produção é injetada pelo Azure
+      # via Configuração → Cadeias de conexão (SQLCONNSTR_DefaultConnection).
       - ConnectionStrings__DefaultConnection=Server=tcp:pedidos-sql-rc.database.windows.net,1433;Initial Catalog=pedidos-db-rc;User ID=pedidos-user;Password=${SQL_PASSWORD};Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;
 
-      # ── Feature Flags (override de appsettings.RC.json) ───────────
       - FeatureManagement__DescontoPremium=true
       - FeatureManagement__DescontoProgressivo=false
       - FeatureManagement__NovoCalculoFrete=false
