@@ -20,7 +20,7 @@
 #    Environments:
 #      alpha, beta, rc, stable
 #    Docker Hub:
-#      Repositório: maqbrdevops/myrepo-devops
+#      Repositório: maqbrdevops/pedidosapi
 #      Web App Container: configurar para pull do Docker Hub
 # ============================================================
 
@@ -40,7 +40,7 @@ pool:
 variables:
   buildConfiguration: 'Release'
   dotnetVersion:      '10.x'
-  DOCKERHUB_REPO:     'maqbrdevops/myrepo-devops'
+  DOCKERHUB_REPO:     'maqbrdevops/pedidosapi'
   APP_NAME_ALPHA:     'pedidos-api-curso-devops-alpha'
   APP_NAME_BETA:      'pedidos-api-curso-devops-beta'
   APP_NAME_RC:        'pedidos-api-curso-devops-rc'
