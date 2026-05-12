@@ -211,7 +211,7 @@ stages:
           - script: |
               sleep 20
               STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-                https://$(APP_NAME_ALPHA)-hbdpfdc7dhgmbscv.brazilsouth-01.azurewebsites.net/pedidos)
+                https://$(APP_NAME_ALPHA)-hbdpfdc7dhgmbscv.canadacentral-01.azurewebsites.net/info)
               echo "Smoke test Alpha: $STATUS"
               [ "$STATUS" = "200" ] && echo "OK" || exit 1
             displayName: '2. Smoke test Alpha'
@@ -246,7 +246,7 @@ stages:
           - script: |
               sleep 20
               STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-                https://$(APP_NAME_BETA)-bbbgc9e8bsfafzf7.brazilsouth-01.azurewebsites.net/pedidos)
+                https://$(APP_NAME_BETA)-beta-bbbgc9e8bsfafzf7.canadacentral-01.azurewebsites.net/info)
               echo "Smoke test Beta: $STATUS"
               [ "$STATUS" = "200" ] && echo "OK" || exit 1
             displayName: '2. Smoke test Beta'
@@ -281,7 +281,7 @@ stages:
           - script: |
               sleep 20
               STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-                https://$(APP_NAME_RC)-a3gqd4ctgpbmb7gf.brazilsouth-01.azurewebsites.net/pedidos)
+                https://$(APP_NAME_RC)-a3gqd4ctgpbmb7gf.canadacentral-01.azurewebsites.net/info)
               echo "Smoke test RC: $STATUS"
               [ "$STATUS" = "200" ] && echo "OK" || exit 1
             displayName: '2. Smoke test RC'
@@ -319,7 +319,7 @@ stages:
           - script: |
               sleep 25
               STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-                https://$(APP_NAME_STABLE)-hdaebhgzbxdxajdw.brazilsouth-01.azurewebsites.net/pedidos)
+                https://$(APP_NAME_STABLE)-hdaebhgzbxdxajdw.canadacentral-01.azurewebsites.net/info)
               echo "Smoke test Stable: $STATUS"
               [ "$STATUS" = "200" ] && echo "OK — produção no ar!" || exit 1
             displayName: '2. Smoke test Stable'
