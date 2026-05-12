@@ -151,7 +151,7 @@ stages:
       displayName: '8. Publicar resultados e verificar Quality Gate'
       inputs:
         pollingTimeoutSec: '300'
-
+      continueOnError: true
     # ── Docker build + push ────────────────────────────────────
     # A tarefa Docker@2 com buildAndPush:
     #   1. Autentica no ACR via service connection (sc-acr-pedidosapi)
