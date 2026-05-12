@@ -60,6 +60,9 @@ stages:
     displayName: 'Build, Test e Push para ACR'
     steps:
 
+    - checkout: self
+      fetchDepth: 0
+
     - task: UseDotNet@2
       displayName: '1. Instalar .NET SDK $(dotnetVersion)'
       inputs:
