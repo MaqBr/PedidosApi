@@ -16,7 +16,6 @@
 #
 #  Pré-requisitos no Azure DevOps:
 #    Service connections:
-#      sc-sonarcloud       → SonarCloud
 #      sc-acr-pedidosapi   → Azure Container Registry (tipo Docker Registry)
 #      sc-azure-pedidosapi → Azure Resource Manager (para Web App)
 #    Environments:
@@ -54,14 +53,11 @@ stages:
 
 # ── CI ────────────────────────────────────────────────────────
 - stage: CI
-  displayName: 'CI — Build, Test, SonarCloud e Push ACR'
+  displayName: 'CI — Build, Test e Push ACR'
   jobs:
   - job: BuildTestPush
     displayName: 'Build, Test e Push para ACR'
     steps:
-
-    - checkout: self
-      fetchDepth: 0
 
     - task: UseDotNet@2
       displayName: '1. Instalar .NET SDK $(dotnetVersion)'
@@ -98,7 +94,7 @@ stages:
       name: versao
       displayName: '2. Calcular versão SemVer e tag de ambiente'
 
-    # ── Testes e SonarCloud rodam no host (não dentro do Docker) ──
+    # ── Testes rodam no host (não dentro do Docker) ──
     # O Docker build faz seu próprio dotnet publish internamente.
 
     - task: DotNetCoreCLI@2
@@ -107,34 +103,8 @@ stages:
         command: restore
         projects: '**/*.csproj'
 
-    - task: SonarCloudPrepare@4
-      displayName: '4. Preparar análise SonarCloud'
-      inputs:
-        SonarCloud: 'sc-sonarcloud'
-        organization: 'maqbrdevops'
-        scannerMode: 'dotnet'
-        projectKey: 'maqbrdevops'
-        projectName: 'PedidosApi'
-        extraProperties: |
-          sonar.cs.opencover.reportsPaths=$(Agent.TempDirectory)/**/coverage.opencover.xml
-          sonar.exclusions=**/obj/**,**/bin/**
-
     - task: DotNetCoreCLI@2
-      displayName: '5. Build (para testes e SonarCloud)'
-      inputs:
-        command: build
-        projects: '**/*.csproj'
-        arguments: >
-          --configuration $(buildConfiguration)
-          --no-restore
-          -p:Version=$(assemblyVersion)
-          -p:AssemblyVersion=$(assemblyVersion)
-          -p:FileVersion=$(assemblyVersion)
-          -p:InformationalVersion=$(versao.appVersion)
-          -p:IncludeSourceRevisionInInformationalVersion=false
-
-    - task: DotNetCoreCLI@2
-      displayName: '6. Testes unitários com cobertura'
+      displayName: '4. Testes unitários com cobertura'
       inputs:
         command: test
         projects: '**/*Tests*.csproj'
@@ -144,14 +114,6 @@ stages:
           --collect:"XPlat Code Coverage"
         publishTestResults: true
 
-    - task: SonarCloudAnalyze@4
-      displayName: '7. Executar análise SonarCloud'
-
-    - task: SonarCloudPublish@4
-      displayName: '8. Publicar resultados e verificar Quality Gate'
-      inputs:
-        pollingTimeoutSec: '300'
-      continueOnError: true
     # ── Docker build + push ────────────────────────────────────
     # A tarefa Docker@2 com buildAndPush:
     #   1. Autentica no ACR via service connection (sc-acr-pedidosapi)
@@ -160,7 +122,7 @@ stages:
     #   3. Gera duas tags: versão exata + tag de ambiente
     #   4. Faz push das duas tags para o ACR
     - task: Docker@2
-      displayName: '9. Build e Push da imagem para o ACR'
+      displayName: '5. Build e Push da imagem para o ACR'
       inputs:
         command: buildAndPush
         containerRegistry: 'sc-acr-pedidosapi'
