@@ -1,0 +1,57 @@
+# ============================================================
+#  PedidosApi — Deployment K8s
+#  Registry: Docker Hub (maqbrdevops/pedidosapi)
+# ============================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pedidosapi
+  namespace: alpha          # alpha | beta | rc | stable
+  labels:
+    app: pedidosapi
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: pedidosapi
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: pedidosapi
+    spec:
+      imagePullSecrets:
+      - name: dockerhub-secret
+      containers:
+      - name: pedidosapi
+        image: maqbrdevops/pedidosapi:alpha
+        ports:
+        - containerPort: 8080
+        envFrom:
+        - configMapRef:
+            name: pedidosapi-config
+        - secretRef:
+            name: pedidosapi-secret
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "500m"
+            memory: "256Mi"
+        readinessProbe:
+          httpGet:
+            path: /info
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /info
+            port: 8080
+          initialDelaySeconds: 20
+          periodSeconds: 15
