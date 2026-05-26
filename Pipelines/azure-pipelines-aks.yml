@@ -17,7 +17,7 @@
 #  Pré-requisitos no Azure DevOps:
 #    Service connections:
 #      sc-dockerhub-pedidosapi → Docker Hub (tipo Docker Registry)
-#      sc-aks-pedidosapi       → Azure Resource Manager (para AKS)
+#      sc-azure-pedidosapi     → Azure Resource Manager (para AKS)
 #    Environments:
 #      alpha, beta, rc, stable  (com aprovações configuradas em rc e stable)
 #    AKS:
