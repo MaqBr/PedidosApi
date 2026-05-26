@@ -6,7 +6,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: pedidosapi
-  namespace: alpha          # alpha | beta | rc | stable
+  namespace: NAMESPACE_TAG    # ← placeholder alpha | beta | rc | stable
   labels:
     app: pedidosapi
 spec:
@@ -28,7 +28,7 @@ spec:
       - name: dockerhub-secret
       containers:
       - name: pedidosapi
-        image: maqbrdevops/pedidosapi:alpha
+        image: maqbrdevops/pedidosapi:IMAGE_TAG    # ← placeholder
         ports:
         - containerPort: 8080
         envFrom:
