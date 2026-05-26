@@ -203,7 +203,7 @@ stages:
                   --overwrite-existing
 
                 sleep 10
-                SVC_IP=$(kubectl get svc pedidosapi-service -n alpha \
+                SVC_IP=$(kubectl get svc pedidosapi-svc -n alpha \
                   -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
                 echo "Service IP: $SVC_IP"
                 STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://$SVC_IP/info)
@@ -266,7 +266,7 @@ stages:
                   --overwrite-existing
 
                 sleep 10
-                SVC_IP=$(kubectl get svc pedidosapi-service -n beta \
+                SVC_IP=$(kubectl get svc pedidosapi-svc -n beta \
                   -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
                 echo "Service IP: $SVC_IP"
                 STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://$SVC_IP/info)
@@ -329,7 +329,7 @@ stages:
                   --overwrite-existing
 
                 sleep 10
-                SVC_IP=$(kubectl get svc pedidosapi-service -n rc \
+                SVC_IP=$(kubectl get svc pedidosapi-svc -n rc \
                   -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
                 echo "Service IP: $SVC_IP"
                 STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://$SVC_IP/info)
@@ -395,7 +395,7 @@ stages:
                   --overwrite-existing
 
                 sleep 10
-                SVC_IP=$(kubectl get svc pedidosapi-service -n stable \
+                SVC_IP=$(kubectl get svc pedidosapi-svc -n stable \
                   -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
                 echo "Service IP: $SVC_IP"
                 STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://$SVC_IP/info)
