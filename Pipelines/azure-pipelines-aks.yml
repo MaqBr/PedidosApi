@@ -4,7 +4,8 @@
 #
 #  CI  : dotnet publish DENTRO do Docker (build multi-stage)
 #         imagem enviada ao Docker Hub com tag SemVer
-#  CD  : kubectl set image → atualiza Deployment no AKS
+#  CD  : AzureCLI@2 com kubectl direto (sem Kubernetes@1)
+#         evita bug "Cannot read properties of undefined (forEach)"
 #         cada ambiente = namespace separado no cluster
 #         ASPNETCORE_ENVIRONMENT via ConfigMap por namespace
 #
@@ -126,12 +127,6 @@ stages:
           --collect:"XPlat Code Coverage"
         publishTestResults: true
 
-    # Docker@2 com buildAndPush:
-    #   1. Autentica no Docker Hub via service connection
-    #   2. Executa docker build com os --build-arg de versão
-    #      (dotnet publish ocorre DENTRO do estágio build do Dockerfile)
-    #   3. Gera duas tags: versão exata + tag de ambiente (ex: alpha)
-    #   4. Faz push das duas tags para o Docker Hub
     - task: Docker@2
       displayName: '6. Build e Push da imagem para o Docker Hub'
       inputs:
@@ -172,9 +167,10 @@ stages:
           - script: echo "appVersion=$(appVersion)"
             displayName: '0. Debug appVersion'
 
-          # Autentica no AKS e obtém kubeconfig
+          # AzureCLI@2 substitui Kubernetes@1 para evitar o bug do forEach
+          # Executa: get-credentials + set image + rollout status em um único step
           - task: AzureCLI@2
-            displayName: '1. Autenticar no AKS'
+            displayName: '1. Deploy Alpha (set image + rollout)'
             inputs:
               azureSubscription: 'sc-azure-pedidosapi'
               scriptType: bash
@@ -185,44 +181,34 @@ stages:
                   --name $(AKS_CLUSTER) \
                   --overwrite-existing
 
-          # kubectl set image → atualiza a imagem do container no Deployment
-          # O ConfigMap do namespace alpha já define ASPNETCORE_ENVIRONMENT=Alpha
-          - task: Kubernetes@1
-            displayName: '2. Atualizar imagem no Deployment (alpha)'
-            inputs:
-              connectionType: 'Azure Resource Manager'
-              azureSubscriptionEndpoint: 'sc-azure-pedidosapi'
-              azureResourceGroup: '$(AKS_RESOURCE_GROUP)'
-              kubernetesCluster: '$(AKS_CLUSTER)'
-              namespace: 'alpha'
-              command: set
-              arguments: >
-                image deployment/$(K8S_DEPLOYMENT)
-                $(K8S_CONTAINER)=$(DOCKERHUB_REPO):$(appVersion)
+                echo "→ Atualizando imagem para $(DOCKERHUB_REPO):$(appVersion)"
+                kubectl set image deployment/$(K8S_DEPLOYMENT) \
+                  $(K8S_CONTAINER)=$(DOCKERHUB_REPO):$(appVersion) \
+                  -n alpha
 
-          # Aguarda rollout completo antes do smoke test
-          - task: Kubernetes@1
-            displayName: '3. Aguardar rollout (alpha)'
-            inputs:
-              connectionType: 'Azure Resource Manager'
-              azureSubscriptionEndpoint: 'sc-azure-pedidosapi'
-              azureResourceGroup: '$(AKS_RESOURCE_GROUP)'
-              kubernetesCluster: '$(AKS_CLUSTER)'
-              namespace: 'alpha'
-              command: rollout
-              arguments: 'status deployment/$(K8S_DEPLOYMENT) --timeout=120s'
+                echo "→ Aguardando rollout..."
+                kubectl rollout status deployment/$(K8S_DEPLOYMENT) \
+                  -n alpha --timeout=120s
 
-          # Smoke test via IP público do Service (LoadBalancer) ou Ingress
-          # Ajuste a URL para o IP/hostname do seu Service no namespace alpha
-          - script: |
-              sleep 10
-              SVC_IP=$(kubectl get svc pedidosapi-service -n alpha \
-                -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-              echo "Service IP: $SVC_IP"
-              STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://$SVC_IP/info)
-              echo "Smoke test Alpha: HTTP $STATUS"
-              [ "$STATUS" = "200" ] && echo "✅ Alpha OK" || exit 1
-            displayName: '4. Smoke test Alpha'
+          - task: AzureCLI@2
+            displayName: '2. Smoke test Alpha'
+            inputs:
+              azureSubscription: 'sc-azure-pedidosapi'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az aks get-credentials \
+                  --resource-group $(AKS_RESOURCE_GROUP) \
+                  --name $(AKS_CLUSTER) \
+                  --overwrite-existing
+
+                sleep 10
+                SVC_IP=$(kubectl get svc pedidosapi-service -n alpha \
+                  -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+                echo "Service IP: $SVC_IP"
+                STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://$SVC_IP/info)
+                echo "Smoke test Alpha: HTTP $STATUS"
+                [ "$STATUS" = "200" ] && echo "✅ Alpha OK" || exit 1
 
 # ── BETA ──────────────────────────────────────────────────────
 - stage: DeployBeta
@@ -243,8 +229,11 @@ stages:
       runOnce:
         deploy:
           steps:
+          - script: echo "appVersion=$(appVersion)"
+            displayName: '0. Debug appVersion'
+
           - task: AzureCLI@2
-            displayName: '1. Autenticar no AKS'
+            displayName: '1. Deploy Beta (set image + rollout)'
             inputs:
               azureSubscription: 'sc-azure-pedidosapi'
               scriptType: bash
@@ -255,39 +244,34 @@ stages:
                   --name $(AKS_CLUSTER) \
                   --overwrite-existing
 
-          - task: Kubernetes@1
-            displayName: '2. Atualizar imagem no Deployment (beta)'
-            inputs:
-              connectionType: 'Azure Resource Manager'
-              azureSubscriptionEndpoint: 'sc-azure-pedidosapi'
-              azureResourceGroup: '$(AKS_RESOURCE_GROUP)'
-              kubernetesCluster: '$(AKS_CLUSTER)'
-              namespace: 'beta'
-              command: set
-              arguments: >
-                image deployment/$(K8S_DEPLOYMENT)
-                $(K8S_CONTAINER)=$(DOCKERHUB_REPO):$(appVersion)
+                echo "→ Atualizando imagem para $(DOCKERHUB_REPO):$(appVersion)"
+                kubectl set image deployment/$(K8S_DEPLOYMENT) \
+                  $(K8S_CONTAINER)=$(DOCKERHUB_REPO):$(appVersion) \
+                  -n beta
 
-          - task: Kubernetes@1
-            displayName: '3. Aguardar rollout (beta)'
-            inputs:
-              connectionType: 'Azure Resource Manager'
-              azureSubscriptionEndpoint: 'sc-azure-pedidosapi'
-              azureResourceGroup: '$(AKS_RESOURCE_GROUP)'
-              kubernetesCluster: '$(AKS_CLUSTER)'
-              namespace: 'beta'
-              command: rollout
-              arguments: 'status deployment/$(K8S_DEPLOYMENT) --timeout=120s'
+                echo "→ Aguardando rollout..."
+                kubectl rollout status deployment/$(K8S_DEPLOYMENT) \
+                  -n beta --timeout=120s
 
-          - script: |
-              sleep 10
-              SVC_IP=$(kubectl get svc pedidosapi-service -n beta \
-                -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-              echo "Service IP: $SVC_IP"
-              STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://$SVC_IP/info)
-              echo "Smoke test Beta: HTTP $STATUS"
-              [ "$STATUS" = "200" ] && echo "✅ Beta OK" || exit 1
-            displayName: '4. Smoke test Beta'
+          - task: AzureCLI@2
+            displayName: '2. Smoke test Beta'
+            inputs:
+              azureSubscription: 'sc-azure-pedidosapi'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az aks get-credentials \
+                  --resource-group $(AKS_RESOURCE_GROUP) \
+                  --name $(AKS_CLUSTER) \
+                  --overwrite-existing
+
+                sleep 10
+                SVC_IP=$(kubectl get svc pedidosapi-service -n beta \
+                  -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+                echo "Service IP: $SVC_IP"
+                STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://$SVC_IP/info)
+                echo "Smoke test Beta: HTTP $STATUS"
+                [ "$STATUS" = "200" ] && echo "✅ Beta OK" || exit 1
 
 # ── RC ────────────────────────────────────────────────────────
 - stage: DeployRC
@@ -303,13 +287,16 @@ stages:
   jobs:
   - deployment: DeployRC
     displayName: 'Deploy RC → AKS namespace: rc'
-    environment: 'rc'       # Aprovação configurada no Environment do Azure DevOps
+    environment: 'rc'
     strategy:
       runOnce:
         deploy:
           steps:
+          - script: echo "appVersion=$(appVersion)"
+            displayName: '0. Debug appVersion'
+
           - task: AzureCLI@2
-            displayName: '1. Autenticar no AKS'
+            displayName: '1. Deploy RC (set image + rollout)'
             inputs:
               azureSubscription: 'sc-azure-pedidosapi'
               scriptType: bash
@@ -320,39 +307,34 @@ stages:
                   --name $(AKS_CLUSTER) \
                   --overwrite-existing
 
-          - task: Kubernetes@1
-            displayName: '2. Atualizar imagem no Deployment (rc)'
-            inputs:
-              connectionType: 'Azure Resource Manager'
-              azureSubscriptionEndpoint: 'sc-azure-pedidosapi'
-              azureResourceGroup: '$(AKS_RESOURCE_GROUP)'
-              kubernetesCluster: '$(AKS_CLUSTER)'
-              namespace: 'rc'
-              command: set
-              arguments: >
-                image deployment/$(K8S_DEPLOYMENT)
-                $(K8S_CONTAINER)=$(DOCKERHUB_REPO):$(appVersion)
+                echo "→ Atualizando imagem para $(DOCKERHUB_REPO):$(appVersion)"
+                kubectl set image deployment/$(K8S_DEPLOYMENT) \
+                  $(K8S_CONTAINER)=$(DOCKERHUB_REPO):$(appVersion) \
+                  -n rc
 
-          - task: Kubernetes@1
-            displayName: '3. Aguardar rollout (rc)'
-            inputs:
-              connectionType: 'Azure Resource Manager'
-              azureSubscriptionEndpoint: 'sc-azure-pedidosapi'
-              azureResourceGroup: '$(AKS_RESOURCE_GROUP)'
-              kubernetesCluster: '$(AKS_CLUSTER)'
-              namespace: 'rc'
-              command: rollout
-              arguments: 'status deployment/$(K8S_DEPLOYMENT) --timeout=120s'
+                echo "→ Aguardando rollout..."
+                kubectl rollout status deployment/$(K8S_DEPLOYMENT) \
+                  -n rc --timeout=120s
 
-          - script: |
-              sleep 10
-              SVC_IP=$(kubectl get svc pedidosapi-service -n rc \
-                -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-              echo "Service IP: $SVC_IP"
-              STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://$SVC_IP/info)
-              echo "Smoke test RC: HTTP $STATUS"
-              [ "$STATUS" = "200" ] && echo "✅ RC OK" || exit 1
-            displayName: '4. Smoke test RC'
+          - task: AzureCLI@2
+            displayName: '2. Smoke test RC'
+            inputs:
+              azureSubscription: 'sc-azure-pedidosapi'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az aks get-credentials \
+                  --resource-group $(AKS_RESOURCE_GROUP) \
+                  --name $(AKS_CLUSTER) \
+                  --overwrite-existing
+
+                sleep 10
+                SVC_IP=$(kubectl get svc pedidosapi-service -n rc \
+                  -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+                echo "Service IP: $SVC_IP"
+                STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://$SVC_IP/info)
+                echo "Smoke test RC: HTTP $STATUS"
+                [ "$STATUS" = "200" ] && echo "✅ RC OK" || exit 1
 
 # ── STABLE ────────────────────────────────────────────────────
 - stage: DeployStable
@@ -371,13 +353,16 @@ stages:
   jobs:
   - deployment: DeployStable
     displayName: 'Deploy Stable → AKS namespace: stable'
-    environment: 'stable'   # Aprovação dupla configurada no Environment do Azure DevOps
+    environment: 'stable'
     strategy:
       runOnce:
         deploy:
           steps:
+          - script: echo "appVersion=$(appVersion)"
+            displayName: '0. Debug appVersion'
+
           - task: AzureCLI@2
-            displayName: '1. Autenticar no AKS'
+            displayName: '1. Deploy Stable (set image + rollout)'
             inputs:
               azureSubscription: 'sc-azure-pedidosapi'
               scriptType: bash
@@ -388,39 +373,34 @@ stages:
                   --name $(AKS_CLUSTER) \
                   --overwrite-existing
 
-          - task: Kubernetes@1
-            displayName: '2. Atualizar imagem no Deployment (stable)'
-            inputs:
-              connectionType: 'Azure Resource Manager'
-              azureSubscriptionEndpoint: 'sc-azure-pedidosapi'
-              azureResourceGroup: '$(AKS_RESOURCE_GROUP)'
-              kubernetesCluster: '$(AKS_CLUSTER)'
-              namespace: 'stable'
-              command: set
-              arguments: >
-                image deployment/$(K8S_DEPLOYMENT)
-                $(K8S_CONTAINER)=$(DOCKERHUB_REPO):$(appVersion)
+                echo "→ Atualizando imagem para $(DOCKERHUB_REPO):$(appVersion)"
+                kubectl set image deployment/$(K8S_DEPLOYMENT) \
+                  $(K8S_CONTAINER)=$(DOCKERHUB_REPO):$(appVersion) \
+                  -n stable
 
-          - task: Kubernetes@1
-            displayName: '3. Aguardar rollout (stable)'
-            inputs:
-              connectionType: 'Azure Resource Manager'
-              azureSubscriptionEndpoint: 'sc-azure-pedidosapi'
-              azureResourceGroup: '$(AKS_RESOURCE_GROUP)'
-              kubernetesCluster: '$(AKS_CLUSTER)'
-              namespace: 'stable'
-              command: rollout
-              arguments: 'status deployment/$(K8S_DEPLOYMENT) --timeout=180s'
+                echo "→ Aguardando rollout..."
+                kubectl rollout status deployment/$(K8S_DEPLOYMENT) \
+                  -n stable --timeout=180s
 
-          - script: |
-              sleep 10
-              SVC_IP=$(kubectl get svc pedidosapi-service -n stable \
-                -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-              echo "Service IP: $SVC_IP"
-              STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://$SVC_IP/info)
-              echo "Smoke test Stable: HTTP $STATUS"
-              [ "$STATUS" = "200" ] && echo "✅ Stable — produção no ar!" || exit 1
-            displayName: '4. Smoke test Stable'
+          - task: AzureCLI@2
+            displayName: '2. Smoke test Stable'
+            inputs:
+              azureSubscription: 'sc-azure-pedidosapi'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az aks get-credentials \
+                  --resource-group $(AKS_RESOURCE_GROUP) \
+                  --name $(AKS_CLUSTER) \
+                  --overwrite-existing
+
+                sleep 10
+                SVC_IP=$(kubectl get svc pedidosapi-service -n stable \
+                  -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+                echo "Service IP: $SVC_IP"
+                STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://$SVC_IP/info)
+                echo "Smoke test Stable: HTTP $STATUS"
+                [ "$STATUS" = "200" ] && echo "✅ Stable — produção no ar!" || exit 1
 
           - script: |
               echo "================================================"
@@ -430,4 +410,4 @@ stages:
               echo " Cluster: $(AKS_CLUSTER)"
               echo " NS     : stable"
               echo "================================================"
-            displayName: '5. Resumo do deploy'
+            displayName: '3. Resumo do deploy'
