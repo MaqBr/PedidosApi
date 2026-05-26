@@ -1,13 +1,21 @@
 # ============================================================
-#  PedidosApi — Pipeline CI/CD com Docker Hub + AKS
+#  PedidosApi — Pipeline CI/CD com Docker Hub + AKS — GitOps
 #  Alpha → Beta → RC → Stable
 #
 #  CI  : dotnet publish DENTRO do Docker (build multi-stage)
 #         imagem enviada ao Docker Hub com tag SemVer
-#  CD  : AzureCLI@2 com kubectl direto (sem Kubernetes@1)
-#         evita bug "Cannot read properties of undefined (forEach)"
+#  CD  : kubectl apply -f k8s/ → GitOps
+#         sed injeta a versão no deployment.yaml antes do apply
 #         cada ambiente = namespace separado no cluster
-#         ASPNETCORE_ENVIRONMENT via ConfigMap por namespace
+#         ASPNETCORE_ENVIRONMENT via ConfigMap por namespace (configmap.yaml)
+#
+#  Estrutura da pasta k8s/:
+#    configmap.yaml   → variáveis de ambiente por namespace
+#    deployment.yaml  → contém placeholder IMAGE_TAG para substituição
+#    service.yaml     → LoadBalancer (pedidosapi-svc)
+#    hpa.yaml         → autoscaling de pods
+#    blue-green.yaml  → estratégia blue-green (opcional)
+#    canary.yaml      → estratégia canary (opcional)
 #
 #  Triggers por tag SemVer:
 #    v*.*.*-alpha.*  → CI + Deploy Alpha
@@ -22,10 +30,9 @@
 #    Environments:
 #      alpha, beta, rc, stable  (com aprovações configuradas em rc e stable)
 #    AKS:
-#      Cluster  : aks-pedidosapi-curso
-#      Namespaces: alpha, beta, rc, stable
-#      Deployments: pedidosapi (em cada namespace)
-#      ImagePullSecret: dockerhub-secret (em cada namespace)
+#      Cluster    : aks-pedidosapi-curso
+#      Namespaces : alpha, beta, rc, stable
+#      deployment.yaml deve conter: image: maqbrdevops/pedidosapi:IMAGE_TAG
 # ============================================================
 
 trigger:
@@ -47,8 +54,8 @@ variables:
   DOCKERHUB_REPO:     'maqbrdevops/pedidosapi'
   AKS_RESOURCE_GROUP: 'DefaultResourceGroup-CCAN'
   AKS_CLUSTER:        'aks-pedidosapi-curso'
+  K8S_MANIFESTS_DIR:  'k8s'
   K8S_DEPLOYMENT:     'pedidosapi'
-  K8S_CONTAINER:      'pedidosapi'
 
 stages:
 
@@ -142,6 +149,24 @@ stages:
           --build-arg VERSION=$(versao.appVersion)
           --build-arg ASSEMBLY_VERSION=$(assemblyVersion)
 
+    # Publica a pasta k8s/ como artefato do pipeline
+    # Os stages de deploy fazem download e aplicam os manifests
+    # O deployment.yaml contém IMAGE_TAG que será substituído por sed
+    - task: PublishPipelineArtifact@1
+      displayName: '7. Publicar manifests k8s como artefato'
+      inputs:
+        targetPath: '$(K8S_MANIFESTS_DIR)'
+        artifact: 'k8s-manifests'
+        publishLocation: 'pipeline'
+
+# ── TEMPLATE de deploy reutilizável ───────────────────────────
+# Cada stage de deploy segue o mesmo padrão:
+#   1. Download do artefato k8s-manifests
+#   2. sed substitui IMAGE_TAG → versão real no deployment.yaml
+#   3. kubectl apply -f . → aplica TODOS os manifests do namespace
+#   4. kubectl rollout status → aguarda pods subirem
+#   5. Smoke test via IP do LoadBalancer
+
 # ── ALPHA ─────────────────────────────────────────────────────
 - stage: DeployAlpha
   displayName: 'Alpha — Deploy automático'
@@ -167,10 +192,17 @@ stages:
           - script: echo "appVersion=$(appVersion)"
             displayName: '0. Debug appVersion'
 
-          # AzureCLI@2 substitui Kubernetes@1 para evitar o bug do forEach
-          # Executa: get-credentials + set image + rollout status em um único step
+          # Download do artefato publicado no CI
+          - task: DownloadPipelineArtifact@2
+            displayName: '1. Download manifests k8s'
+            inputs:
+              artifactName: 'k8s-manifests'
+              targetPath: '$(Pipeline.Workspace)/k8s'
+
+          # sed substitui IMAGE_TAG pelo valor real de appVersion
+          # O deployment.yaml deve conter: image: maqbrdevops/pedidosapi:IMAGE_TAG
           - task: AzureCLI@2
-            displayName: '1. Deploy Alpha (set image + rollout)'
+            displayName: '2. Apply manifests + rollout (alpha)'
             inputs:
               azureSubscription: 'sc-azure-pedidosapi'
               scriptType: bash
@@ -181,17 +213,25 @@ stages:
                   --name $(AKS_CLUSTER) \
                   --overwrite-existing
 
-                echo "→ Atualizando imagem para $(DOCKERHUB_REPO):$(appVersion)"
-                kubectl set image deployment/$(K8S_DEPLOYMENT) \
-                  $(K8S_CONTAINER)=$(DOCKERHUB_REPO):$(appVersion) \
-                  -n alpha
+                echo "→ Substituindo IMAGE_TAG por $(appVersion) no deployment.yaml"
+                sed -i "s|IMAGE_TAG|$(appVersion)|g" \
+                  $(Pipeline.Workspace)/k8s/deployment.yaml
+
+                echo "→ Conteúdo da imagem após substituição:"
+                grep "image:" $(Pipeline.Workspace)/k8s/deployment.yaml
+
+                echo "→ Aplicando manifests no namespace alpha..."
+                kubectl apply -f $(Pipeline.Workspace)/k8s/configmap.yaml  -n alpha
+                kubectl apply -f $(Pipeline.Workspace)/k8s/deployment.yaml -n alpha
+                kubectl apply -f $(Pipeline.Workspace)/k8s/service.yaml    -n alpha
+                kubectl apply -f $(Pipeline.Workspace)/k8s/hpa.yaml        -n alpha
 
                 echo "→ Aguardando rollout..."
                 kubectl rollout status deployment/$(K8S_DEPLOYMENT) \
                   -n alpha --timeout=120s
 
           - task: AzureCLI@2
-            displayName: '2. Smoke test Alpha'
+            displayName: '3. Smoke test Alpha'
             inputs:
               azureSubscription: 'sc-azure-pedidosapi'
               scriptType: bash
@@ -232,8 +272,14 @@ stages:
           - script: echo "appVersion=$(appVersion)"
             displayName: '0. Debug appVersion'
 
+          - task: DownloadPipelineArtifact@2
+            displayName: '1. Download manifests k8s'
+            inputs:
+              artifactName: 'k8s-manifests'
+              targetPath: '$(Pipeline.Workspace)/k8s'
+
           - task: AzureCLI@2
-            displayName: '1. Deploy Beta (set image + rollout)'
+            displayName: '2. Apply manifests + rollout (beta)'
             inputs:
               azureSubscription: 'sc-azure-pedidosapi'
               scriptType: bash
@@ -244,17 +290,25 @@ stages:
                   --name $(AKS_CLUSTER) \
                   --overwrite-existing
 
-                echo "→ Atualizando imagem para $(DOCKERHUB_REPO):$(appVersion)"
-                kubectl set image deployment/$(K8S_DEPLOYMENT) \
-                  $(K8S_CONTAINER)=$(DOCKERHUB_REPO):$(appVersion) \
-                  -n beta
+                echo "→ Substituindo IMAGE_TAG por $(appVersion) no deployment.yaml"
+                sed -i "s|IMAGE_TAG|$(appVersion)|g" \
+                  $(Pipeline.Workspace)/k8s/deployment.yaml
+
+                echo "→ Conteúdo da imagem após substituição:"
+                grep "image:" $(Pipeline.Workspace)/k8s/deployment.yaml
+
+                echo "→ Aplicando manifests no namespace beta..."
+                kubectl apply -f $(Pipeline.Workspace)/k8s/configmap.yaml  -n beta
+                kubectl apply -f $(Pipeline.Workspace)/k8s/deployment.yaml -n beta
+                kubectl apply -f $(Pipeline.Workspace)/k8s/service.yaml    -n beta
+                kubectl apply -f $(Pipeline.Workspace)/k8s/hpa.yaml        -n beta
 
                 echo "→ Aguardando rollout..."
                 kubectl rollout status deployment/$(K8S_DEPLOYMENT) \
                   -n beta --timeout=120s
 
           - task: AzureCLI@2
-            displayName: '2. Smoke test Beta'
+            displayName: '3. Smoke test Beta'
             inputs:
               azureSubscription: 'sc-azure-pedidosapi'
               scriptType: bash
@@ -295,8 +349,14 @@ stages:
           - script: echo "appVersion=$(appVersion)"
             displayName: '0. Debug appVersion'
 
+          - task: DownloadPipelineArtifact@2
+            displayName: '1. Download manifests k8s'
+            inputs:
+              artifactName: 'k8s-manifests'
+              targetPath: '$(Pipeline.Workspace)/k8s'
+
           - task: AzureCLI@2
-            displayName: '1. Deploy RC (set image + rollout)'
+            displayName: '2. Apply manifests + rollout (rc)'
             inputs:
               azureSubscription: 'sc-azure-pedidosapi'
               scriptType: bash
@@ -307,17 +367,25 @@ stages:
                   --name $(AKS_CLUSTER) \
                   --overwrite-existing
 
-                echo "→ Atualizando imagem para $(DOCKERHUB_REPO):$(appVersion)"
-                kubectl set image deployment/$(K8S_DEPLOYMENT) \
-                  $(K8S_CONTAINER)=$(DOCKERHUB_REPO):$(appVersion) \
-                  -n rc
+                echo "→ Substituindo IMAGE_TAG por $(appVersion) no deployment.yaml"
+                sed -i "s|IMAGE_TAG|$(appVersion)|g" \
+                  $(Pipeline.Workspace)/k8s/deployment.yaml
+
+                echo "→ Conteúdo da imagem após substituição:"
+                grep "image:" $(Pipeline.Workspace)/k8s/deployment.yaml
+
+                echo "→ Aplicando manifests no namespace rc..."
+                kubectl apply -f $(Pipeline.Workspace)/k8s/configmap.yaml  -n rc
+                kubectl apply -f $(Pipeline.Workspace)/k8s/deployment.yaml -n rc
+                kubectl apply -f $(Pipeline.Workspace)/k8s/service.yaml    -n rc
+                kubectl apply -f $(Pipeline.Workspace)/k8s/hpa.yaml        -n rc
 
                 echo "→ Aguardando rollout..."
                 kubectl rollout status deployment/$(K8S_DEPLOYMENT) \
                   -n rc --timeout=120s
 
           - task: AzureCLI@2
-            displayName: '2. Smoke test RC'
+            displayName: '3. Smoke test RC'
             inputs:
               azureSubscription: 'sc-azure-pedidosapi'
               scriptType: bash
@@ -361,8 +429,14 @@ stages:
           - script: echo "appVersion=$(appVersion)"
             displayName: '0. Debug appVersion'
 
+          - task: DownloadPipelineArtifact@2
+            displayName: '1. Download manifests k8s'
+            inputs:
+              artifactName: 'k8s-manifests'
+              targetPath: '$(Pipeline.Workspace)/k8s'
+
           - task: AzureCLI@2
-            displayName: '1. Deploy Stable (set image + rollout)'
+            displayName: '2. Apply manifests + rollout (stable)'
             inputs:
               azureSubscription: 'sc-azure-pedidosapi'
               scriptType: bash
@@ -373,17 +447,25 @@ stages:
                   --name $(AKS_CLUSTER) \
                   --overwrite-existing
 
-                echo "→ Atualizando imagem para $(DOCKERHUB_REPO):$(appVersion)"
-                kubectl set image deployment/$(K8S_DEPLOYMENT) \
-                  $(K8S_CONTAINER)=$(DOCKERHUB_REPO):$(appVersion) \
-                  -n stable
+                echo "→ Substituindo IMAGE_TAG por $(appVersion) no deployment.yaml"
+                sed -i "s|IMAGE_TAG|$(appVersion)|g" \
+                  $(Pipeline.Workspace)/k8s/deployment.yaml
+
+                echo "→ Conteúdo da imagem após substituição:"
+                grep "image:" $(Pipeline.Workspace)/k8s/deployment.yaml
+
+                echo "→ Aplicando manifests no namespace stable..."
+                kubectl apply -f $(Pipeline.Workspace)/k8s/configmap.yaml  -n stable
+                kubectl apply -f $(Pipeline.Workspace)/k8s/deployment.yaml -n stable
+                kubectl apply -f $(Pipeline.Workspace)/k8s/service.yaml    -n stable
+                kubectl apply -f $(Pipeline.Workspace)/k8s/hpa.yaml        -n stable
 
                 echo "→ Aguardando rollout..."
                 kubectl rollout status deployment/$(K8S_DEPLOYMENT) \
                   -n stable --timeout=180s
 
           - task: AzureCLI@2
-            displayName: '2. Smoke test Stable'
+            displayName: '3. Smoke test Stable'
             inputs:
               azureSubscription: 'sc-azure-pedidosapi'
               scriptType: bash
@@ -410,4 +492,4 @@ stages:
               echo " Cluster: $(AKS_CLUSTER)"
               echo " NS     : stable"
               echo "================================================"
-            displayName: '3. Resumo do deploy'
+            displayName: '4. Resumo do deploy'
