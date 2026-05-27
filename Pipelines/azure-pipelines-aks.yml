@@ -242,7 +242,7 @@ stages:
 
                 echo "→ Aguardando rollout..."
                 kubectl rollout status deployment/$(K8S_DEPLOYMENT) \
-                  -n alpha --timeout=120s
+                  -n alpha --timeout=300s
 
           - task: AzureCLI@2
             displayName: '4. Smoke test Alpha'
@@ -332,7 +332,7 @@ stages:
 
                 echo "→ Aguardando rollout..."
                 kubectl rollout status deployment/$(K8S_DEPLOYMENT) \
-                  -n beta --timeout=120s
+                  -n beta --timeout=300s
 
           - task: AzureCLI@2
             displayName: '4. Smoke test Beta'
@@ -422,7 +422,7 @@ stages:
 
                 echo "→ Aguardando rollout..."
                 kubectl rollout status deployment/$(K8S_DEPLOYMENT) \
-                  -n rc --timeout=120s
+                  -n rc --timeout=300s
 
           - task: AzureCLI@2
             displayName: '4. Smoke test RC'
