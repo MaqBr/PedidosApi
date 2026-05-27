@@ -1,5 +1,17 @@
 # ============================================================
 #  PedidosApi — Blue-Green Deployment (Docker Hub)
+#
+#  Placeholders substituídos pela pipeline via sed:
+#    BLUE_TAG  → versão atual em produção  ex: 1.0.9
+#    IMAGE_TAG → nova versão (Green)       ex: 1.1.0
+#
+#  Fluxo:
+#    1. Pipeline aplica este arquivo com as tags substituídas
+#    2. Blue continua recebendo 100% do tráfego
+#    3. Green sobe com a nova versão (zero tráfego ainda)
+#    4. Validação do Green via pedidosapi-green-svc (ClusterIP)
+#    5. Switch manual: kubectl patch svc pedidosapi-svc → selector: green
+#    6. Rollback: kubectl patch svc pedidosapi-svc → selector: blue
 # ============================================================
 apiVersion: apps/v1
 kind: Deployment
@@ -25,7 +37,7 @@ spec:
       - name: dockerhub-secret
       containers:
       - name: pedidosapi
-        image: maqbrdevops/pedidosapi:1.0.9
+        image: maqbrdevops/pedidosapi:BLUE_TAG    # ← versão atual (não alterada pelo deploy)
         ports:
         - containerPort: 8080
         envFrom:
@@ -71,7 +83,7 @@ spec:
       - name: dockerhub-secret
       containers:
       - name: pedidosapi
-        image: maqbrdevops/pedidosapi:1.1.0
+        image: maqbrdevops/pedidosapi:IMAGE_TAG    # ← nova versão (substituída pela pipeline)
         ports:
         - containerPort: 8080
         envFrom:
@@ -93,6 +105,9 @@ spec:
           initialDelaySeconds: 10
           periodSeconds: 5
 ---
+# Service público — aponta para Blue por padrão
+# Switch para Green: kubectl patch svc pedidosapi-svc -n stable
+#   -p '{"spec":{"selector":{"version":"green"}}}'
 apiVersion: v1
 kind: Service
 metadata:
@@ -104,11 +119,12 @@ spec:
   type: LoadBalancer
   selector:
     app: pedidosapi
-    version: blue
+    version: blue    # ← aponta para Blue (tráfego 100%)
   ports:
   - port: 80
     targetPort: 8080
 ---
+# Service interno para validar o Green antes do switch
 apiVersion: v1
 kind: Service
 metadata:
