@@ -14,15 +14,15 @@ metadata:
   labels:
     app: pedidosapi
 spec:
-  replicas: 2
+  replicas: 10
   selector:
     matchLabels:
       app: pedidosapi
   strategy:
     type: RollingUpdate
     rollingUpdate:
-      maxSurge: 1
-      maxUnavailable: 0
+      maxSurge: 2        # sobe 2 pods novos por vez (20% das réplicas)
+      maxUnavailable: 1  # permite 1 pod indisponível durante o rollout
   template:
     metadata:
       labels:
@@ -42,20 +42,29 @@ spec:
             name: pedidosapi-secret
         resources:
           requests:
-            cpu: "100m"
-            memory: "128Mi"
+            cpu: "50m"
+            memory: "96Mi"
           limits:
-            cpu: "500m"
-            memory: "256Mi"
+            cpu: "200m"
+            memory: "192Mi"
         readinessProbe:
           httpGet:
             path: /info
             port: 8080
           initialDelaySeconds: 10
           periodSeconds: 5
+          failureThreshold: 3    # 3 falhas antes de marcar como não pronto
         livenessProbe:
           httpGet:
             path: /info
             port: 8080
           initialDelaySeconds: 20
           periodSeconds: 15
+          failureThreshold: 3    # 3 falhas antes de reiniciar o container
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: DoNotSchedule
+        labelSelector:
+          matchLabels:
+            app: pedidosapi
