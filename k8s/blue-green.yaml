@@ -22,7 +22,7 @@ metadata:
     app: pedidosapi
     version: blue
 spec:
-  replicas: 3
+  replicas: 5
   selector:
     matchLabels:
       app: pedidosapi
@@ -47,11 +47,11 @@ spec:
             name: pedidosapi-secret
         resources:
           requests:
-            cpu: "100m"
-            memory: "128Mi"
+            cpu: "10m"
+            memory: "32Mi"
           limits:
-            cpu: "500m"
-            memory: "256Mi"
+            cpu: "100m"
+            memory: "64Mi"
         readinessProbe:
           httpGet:
             path: /info
@@ -93,11 +93,11 @@ spec:
             name: pedidosapi-secret
         resources:
           requests:
-            cpu: "100m"
-            memory: "128Mi"
+            cpu: "10m"
+            memory: "32Mi"
           limits:
-            cpu: "500m"
-            memory: "256Mi"
+            cpu: "100m"
+            memory: "64Mi"
         readinessProbe:
           httpGet:
             path: /info
