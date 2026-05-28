@@ -14,7 +14,7 @@ metadata:
   labels:
     app: pedidosapi
 spec:
-  replicas: 10
+  replicas: 6
   selector:
     matchLabels:
       app: pedidosapi
