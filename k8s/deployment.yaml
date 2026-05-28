@@ -14,15 +14,15 @@ metadata:
   labels:
     app: pedidosapi
 spec:
-  replicas: 6
+  replicas: 3
   selector:
     matchLabels:
       app: pedidosapi
   strategy:
     type: RollingUpdate
     rollingUpdate:
-      maxSurge: 12        # sobe 2 pods novos por vez (20% das réplicas)
-      maxUnavailable: 0  # permite 1 pod indisponível durante o rollout
+      maxSurge: 1        # sobe 1 pods novos por vez
+      maxUnavailable: 0  # permite 0 pod indisponível durante o rollout
   template:
     metadata:
       labels:
