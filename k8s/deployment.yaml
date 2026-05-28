@@ -14,15 +14,15 @@ metadata:
   labels:
     app: pedidosapi
 spec:
-  replicas: 10
+  replicas: 6
   selector:
     matchLabels:
       app: pedidosapi
   strategy:
     type: RollingUpdate
     rollingUpdate:
-      maxSurge: 2        # sobe 2 pods novos por vez (20% das réplicas)
-      maxUnavailable: 1  # permite 1 pod indisponível durante o rollout
+      maxSurge: 12        # sobe 2 pods novos por vez (20% das réplicas)
+      maxUnavailable: 0  # permite 1 pod indisponível durante o rollout
   template:
     metadata:
       labels:
@@ -43,10 +43,10 @@ spec:
         resources:
           requests:
             cpu: "50m"
-            memory: "96Mi"
+            memory: "64Mi"
           limits:
             cpu: "200m"
-            memory: "192Mi"
+            memory: "128Mi"
         readinessProbe:
           httpGet:
             path: /info
