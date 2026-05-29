@@ -65,6 +65,8 @@ stages:
 
 # ── CI ────────────────────────────────────────────────────────
 - template: pipeline/ci.yml
+  parameters:
+    rollbackTag: ${{ parameters.rollbackTag }}
 
 # ── ALPHA ─────────────────────────────────────────────────────
 - template: pipeline/deploy-alpha.yml
