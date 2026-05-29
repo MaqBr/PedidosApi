@@ -22,7 +22,7 @@ metadata:
     app: pedidosapi
     version: blue
 spec:
-  replicas: 5
+  replicas: 3
   selector:
     matchLabels:
       app: pedidosapi
