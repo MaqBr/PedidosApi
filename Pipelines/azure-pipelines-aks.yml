@@ -683,10 +683,28 @@ stages:
                 # sed substitui os dois placeholders:
                 #   BLUE_TAG  → versão atual em produção (obtida do Deployment blue em execução)
                 #   IMAGE_TAG → nova versão (appVersion calculado no CI)
+
+                # 1. Tenta pegar versão do Blue existente
                 CURRENT_BLUE=$(kubectl get deployment pedidosapi-blue -n stable \
                   -o jsonpath='{.spec.template.spec.containers[0].image}' \
-                  2>/dev/null | cut -d: -f2 || echo "latest")
-                echo "→ Blue atual: $CURRENT_BLUE | Green novo: $(appVersion)"
+                  2>/dev/null | cut -d: -f2)
+
+                # 2. Fallback: pega do Rolling (primeira vez Blue-Green)
+                if [ -z "$CURRENT_BLUE" ]; then
+                  CURRENT_BLUE=$(kubectl get deployment pedidosapi -n stable \
+                    -o jsonpath='{.spec.template.spec.containers[0].image}' \
+                    2>/dev/null | cut -d: -f2)
+                  echo "→ Primeira execução Blue-Green — versão do Rolling: $CURRENT_BLUE"
+                fi
+
+                # 3. Fallback final: usa a própria appVersion
+                if [ -z "$CURRENT_BLUE" ]; then
+                  CURRENT_BLUE="$(appVersion)"
+                  echo "→ Nenhum deployment anterior — usando appVersion: $CURRENT_BLUE"
+                fi
+
+                echo "→ Blue (atual): $CURRENT_BLUE"
+                echo "→ Green (novo): $(appVersion)"
 
                 sed -i "s|BLUE_TAG|$CURRENT_BLUE|g"        $(Pipeline.Workspace)/k8s/blue-green.yaml
                 sed -i "s|IMAGE_TAG|$(appVersion)|g"        $(Pipeline.Workspace)/k8s/blue-green.yaml
