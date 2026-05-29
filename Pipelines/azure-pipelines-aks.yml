@@ -680,10 +680,6 @@ stages:
                 echo "→ Blue  = versão atual (já rodando)"
                 echo "→ Green = nova versão: $(appVersion)"
 
-                # sed substitui os dois placeholders:
-                #   BLUE_TAG  → versão atual em produção (obtida do Deployment blue em execução)
-                #   IMAGE_TAG → nova versão (appVersion calculado no CI)
-
                 # 1. Tenta pegar versão do Blue existente
                 CURRENT_BLUE=$(kubectl get deployment pedidosapi-blue -n stable \
                   -o jsonpath='{.spec.template.spec.containers[0].image}' \
@@ -705,6 +701,10 @@ stages:
 
                 echo "→ Blue (atual): $CURRENT_BLUE"
                 echo "→ Green (novo): $(appVersion)"
+
+                # sed substitui os dois placeholders:
+                #   BLUE_TAG  → versão atual em produção (obtida do Deployment blue em execução)
+                #   IMAGE_TAG → nova versão (appVersion calculado no CI)
 
                 sed -i "s|BLUE_TAG|$CURRENT_BLUE|g"        $(Pipeline.Workspace)/k8s/blue-green.yaml
                 sed -i "s|IMAGE_TAG|$(appVersion)|g"        $(Pipeline.Workspace)/k8s/blue-green.yaml
