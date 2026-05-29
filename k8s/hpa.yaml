@@ -27,7 +27,7 @@ spec:
         value: 2                        # remove 2 por vez
         periodSeconds: 15               # a cada 15s
     scaleUp:
-      stabilizationWindowSeconds: 5     # aguarda 5s antes de escalar
+      stabilizationWindowSeconds: 0     # imediato
       policies:
       - type: Pods
         value: 2                        # adiciona 2 por vez
