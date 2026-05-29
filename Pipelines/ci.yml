@@ -1,0 +1,127 @@
+# ============================================================
+#  PedidosApi — Template CI
+#  Build, Test e Push para o Docker Hub
+#
+#  Steps:
+#    1. Instalar .NET SDK 10.x
+#    2. Calcular versão SemVer e tag de ambiente
+#    3. Restaurar pacotes NuGet
+#    4. Build
+#    5. Testes unitários com cobertura
+#    6. Build e Push da imagem para o Docker Hub
+#    7. Publicar manifests k8s como artefato
+#
+#  Outputs:
+#    versao.appVersion  → versão SemVer ex: 1.2.0-alpha.1
+#    versao.envTag      → alpha | beta | rc | stable
+#    versao.envName     → Alpha | Beta | RC | Stable
+#    k8s-manifests      → artefato com a pasta k8s/
+# ============================================================
+
+parameters:              # ← declarar o parâmetro
+- name: rollbackTag
+  type: string
+  default: ''
+
+stages:
+- stage: CI
+  displayName: 'CI — Build, Test e Push Docker Hub'
+  condition: eq('${{ parameters.rollbackTag }}', '') 
+  jobs:
+  - job: BuildTestPush
+    displayName: 'Build, Test e Push para Docker Hub'
+    steps:
+
+    - checkout: self
+      fetchDepth: 0
+
+    - task: UseDotNet@2
+      displayName: '1. Instalar .NET SDK $(dotnetVersion)'
+      inputs:
+        version: '$(dotnetVersion)'
+        includePreviewVersions: true
+
+    - script: |
+        BRANCH="$(Build.SourceBranch)"
+        if [[ "$BRANCH" == refs/tags/v* ]]; then
+          VERSION="${BRANCH#refs/tags/v}"
+          ASSEMBLY_VERSION=$(echo "$VERSION" | cut -d'-' -f1)
+        else
+          VERSION="0.0.0-$(Build.BuildNumber)"
+          ASSEMBLY_VERSION="0.0.0"
+        fi
+
+        if [[ "$BRANCH" == refs/heads/main ]] || [[ "$VERSION" == *-alpha.* ]]; then
+          ENV_TAG="alpha"
+          ENV_NAME="Alpha"
+        elif [[ "$VERSION" == *-beta.* ]]; then
+          ENV_TAG="beta"
+          ENV_NAME="Beta"
+        elif [[ "$VERSION" == *-rc.* ]]; then
+          ENV_TAG="rc"
+          ENV_NAME="RC"
+        else
+          ENV_TAG="stable"
+          ENV_NAME="Stable"
+        fi
+
+        echo "##vso[task.setvariable variable=appVersion;isOutput=true]$VERSION"
+        echo "##vso[task.setvariable variable=assemblyVersion]$ASSEMBLY_VERSION"
+        echo "##vso[task.setvariable variable=envTag;isOutput=true]$ENV_TAG"
+        echo "##vso[task.setvariable variable=envName;isOutput=true]$ENV_NAME"
+        echo "Versão: $VERSION | Assembly: $ASSEMBLY_VERSION | Tag: $ENV_TAG | Env: $ENV_NAME"
+      name: versao
+      displayName: '2. Calcular versão SemVer e tag de ambiente'
+
+    - task: DotNetCoreCLI@2
+      displayName: '3. Restaurar pacotes NuGet'
+      inputs:
+        command: restore
+        projects: '**/*.csproj'
+
+    - task: DotNetCoreCLI@2
+      displayName: '4. Build'
+      inputs:
+        command: build
+        projects: '**/*.csproj'
+        arguments: >
+          --configuration $(buildConfiguration)
+          --no-restore
+          -p:Version=$(assemblyVersion)
+          -p:AssemblyVersion=$(assemblyVersion)
+          -p:FileVersion=$(assemblyVersion)
+          -p:InformationalVersion=$(versao.appVersion)
+          -p:IncludeSourceRevisionInInformationalVersion=false
+
+    - task: DotNetCoreCLI@2
+      displayName: '5. Testes unitários com cobertura'
+      inputs:
+        command: test
+        projects: '**/*Tests*.csproj'
+        arguments: >
+          --configuration $(buildConfiguration)
+          --no-build
+          --collect:"XPlat Code Coverage"
+        publishTestResults: true
+
+    - task: Docker@2
+      displayName: '6. Build e Push da imagem para o Docker Hub'
+      inputs:
+        command: buildAndPush
+        containerRegistry: 'sc-dockerhub-pedidosapi'
+        repository: '$(DOCKERHUB_REPO)'
+        dockerfile: 'Dockerfile'
+        buildContext: '.'
+        tags: |
+          $(versao.appVersion)
+          $(versao.envTag)
+        arguments: >
+          --build-arg VERSION=$(versao.appVersion)
+          --build-arg ASSEMBLY_VERSION=$(assemblyVersion)
+
+    - task: PublishPipelineArtifact@1
+      displayName: '7. Publicar manifests k8s como artefato'
+      inputs:
+        targetPath: '$(K8S_MANIFESTS_DIR)'
+        artifact: 'k8s-manifests'
+        publishLocation: 'pipeline'
