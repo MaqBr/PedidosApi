@@ -4,7 +4,7 @@
 #
 #  Estrutura de arquivos:
 #    azure-pipelines-aks.yml  ← orquestrador (este arquivo)
-#    pipeline/aks
+#    Pipeline/aks
 #      ci.yml                 ← stage CI: build, test, push Docker Hub
 #      deploy-alpha.yml       ← stage Deploy Alpha
 #      deploy-beta.yml        ← stage Deploy Beta
@@ -64,27 +64,27 @@ variables:
 stages:
 
 # ── CI ────────────────────────────────────────────────────────
-- template: pipeline/aks/ci.yml
+- template: Pipelines/aks/ci.yml
   parameters:
     rollbackTag: ${{ parameters.rollbackTag }}
 
 # ── ALPHA ─────────────────────────────────────────────────────
-- template: pipeline/aks/deploy-alpha.yml
+- template: Pipelines/aks/deploy-alpha.yml
   parameters:
     rollbackTag: ${{ parameters.rollbackTag }}
 
 # ── BETA ──────────────────────────────────────────────────────
-- template: pipeline/aks/deploy-beta.yml
+- template: Pipelines/aks/deploy-beta.yml
   parameters:
     rollbackTag: ${{ parameters.rollbackTag }}
 
 # ── RC ────────────────────────────────────────────────────────
-- template: pipeline/aks/deploy-rc.yml
+- template: Pipelines/aks/deploy-rc.yml
   parameters:
     rollbackTag: ${{ parameters.rollbackTag }}
 
 # ── STABLE ────────────────────────────────────────────────────
-- template: pipeline/aks/deploy-stable.yml
+- template: Pipelines/aks/deploy-stable.yml
   parameters:
     deployStrategy: ${{ parameters.deployStrategy }}
     rollbackTag:    ${{ parameters.rollbackTag }}
