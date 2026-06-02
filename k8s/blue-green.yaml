@@ -2,8 +2,8 @@
 #  PedidosApi — Blue-Green Deployment (Docker Hub)
 #
 #  Placeholders substituídos pela pipeline via sed:
-#    BLUE_TAG  → versão atual em produção  ex: 1.0.9
-#    IMAGE_TAG → nova versão (Green)       ex: 1.1.0
+#    BLUE_TAG  → versão atual em produção  ex: 1.7.0
+#    IMAGE_TAG → nova versão (Green)       ex: 1.8.0
 #
 #  Fluxo:
 #    1. Pipeline aplica este arquivo com as tags substituídas
