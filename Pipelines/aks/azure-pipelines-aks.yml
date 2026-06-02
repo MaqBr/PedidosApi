@@ -64,27 +64,27 @@ variables:
 stages:
 
 # ── CI ────────────────────────────────────────────────────────
-- template: Pipelines/aks/ci.yml
+- template: ci.yml
   parameters:
     rollbackTag: ${{ parameters.rollbackTag }}
 
 # ── ALPHA ─────────────────────────────────────────────────────
-- template: Pipelines/aks/deploy-alpha.yml
+- template: deploy-alpha.yml
   parameters:
     rollbackTag: ${{ parameters.rollbackTag }}
 
 # ── BETA ──────────────────────────────────────────────────────
-- template: Pipelines/aks/deploy-beta.yml
+- template: deploy-beta.yml
   parameters:
     rollbackTag: ${{ parameters.rollbackTag }}
 
 # ── RC ────────────────────────────────────────────────────────
-- template: Pipelines/aks/deploy-rc.yml
+- template: deploy-rc.yml
   parameters:
     rollbackTag: ${{ parameters.rollbackTag }}
 
 # ── STABLE ────────────────────────────────────────────────────
-- template: Pipelines/aks/deploy-stable.yml
+- template: deploy-stable.yml
   parameters:
     deployStrategy: ${{ parameters.deployStrategy }}
     rollbackTag:    ${{ parameters.rollbackTag }}
