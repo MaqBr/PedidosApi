@@ -19,7 +19,7 @@
 parameters:
 - name: deployStrategy
   type: string
-  default: 'rolling'
+  default: 'blue-green'
 - name: rollbackTag
   type: string
   default: ''
@@ -199,9 +199,11 @@ stages:
               echo "================================================"
             displayName: '5. Resumo do deploy'
 
-  # ── JOB: Deploy Blue-Green ────────────────────────────────
+  # ── BLUE-GREEN ────────────────────────────────────────────
   # Aplica blue-green.yaml — dois Deployments paralelos (blue e green)
-  # O Service aponta para 'blue' por padrão — troca manual após validação
+  # Blue = versão atual em produção (obtida do cluster)
+  # Green = nova versão (appVersion do CI)
+  # O Service aponta para 'blue' por padrão — switch manual após validação
   - deployment: DeployBlueGreen
     displayName: 'Deploy Stable — Blue-Green'
     condition: >
@@ -214,56 +216,50 @@ stages:
       runOnce:
         deploy:
           steps:
+          - script: echo "appVersion=$(appVersion)"
+            displayName: '0. Debug appVersion'
+
           - task: DownloadPipelineArtifact@2
             displayName: '1. Download manifests k8s'
             inputs:
               artifactName: 'k8s-manifests'
               targetPath: '$(Pipeline.Workspace)/k8s'
 
-          # No blue-green, a nova versão vai para o Green
-          # A imagem do Blue (versão atual) fica intacta no manifest
-          # Apenas o Green recebe IMAGE_TAG da nova versão
+          # Obtém a versão atual do Blue diretamente do cluster
+          # Blue sempre existe — sem fallback
+          # Validação garante que Blue e Green são versões diferentes
           - task: AzureCLI@2
-            displayName: '2. Substituir IMAGE_TAG no Green'
+            displayName: '2. Substituir BLUE_TAG e IMAGE_TAG'
             inputs:
               azureSubscription: 'sc-azure-pedidosapi'
               scriptType: bash
               scriptLocation: inlineScript
               inlineScript: |
-                echo "→ Estratégia: Blue-Green"
-                echo "→ Blue  = versão atual (já rodando)"
-                echo "→ Green = nova versão: $(appVersion)"
+                az aks get-credentials \
+                  --resource-group $(AKS_RESOURCE_GROUP) \
+                  --name $(AKS_CLUSTER) \
+                  --overwrite-existing
 
-                # 1. Tenta pegar versão do Blue existente
+                # Obtém a versão atual do Blue diretamente do cluster
                 CURRENT_BLUE=$(kubectl get deployment pedidosapi-blue -n stable \
                   -o jsonpath='{.spec.template.spec.containers[0].image}' \
-                  2>/dev/null | cut -d: -f2)
-
-                # 2. Fallback: pega do Rolling (primeira vez Blue-Green)
-                if [ -z "$CURRENT_BLUE" ]; then
-                  CURRENT_BLUE=$(kubectl get deployment pedidosapi -n stable \
-                    -o jsonpath='{.spec.template.spec.containers[0].image}' \
-                    2>/dev/null | cut -d: -f2)
-                  echo "→ Primeira execução Blue-Green — versão do Rolling: $CURRENT_BLUE"
-                fi
-
-                # 3. Fallback final: usa a própria appVersion
-                if [ -z "$CURRENT_BLUE" ]; then
-                  CURRENT_BLUE="$(appVersion)"
-                  echo "→ Nenhum deployment anterior — usando appVersion: $CURRENT_BLUE"
-                fi
+                  | cut -d: -f2)
 
                 echo "→ Blue (atual): $CURRENT_BLUE"
                 echo "→ Green (novo): $(appVersion)"
 
-                # sed substitui os dois placeholders:
-                #   BLUE_TAG  → versão atual em produção (obtida do Deployment blue em execução)
-                #   IMAGE_TAG → nova versão (appVersion calculado no CI)
+                # Validação — Blue e Green não podem ser iguais
+                if [ "$CURRENT_BLUE" = "$(appVersion)" ]; then
+                  echo "❌ BLUE_TAG e IMAGE_TAG são iguais: $CURRENT_BLUE"
+                  echo "   Blue-Green requer versões diferentes."
+                  echo "   Crie uma nova tag git antes de executar."
+                  exit 1
+                fi
 
-                sed -i "s|BLUE_TAG|$CURRENT_BLUE|g"        $(Pipeline.Workspace)/k8s/blue-green.yaml
-                sed -i "s|IMAGE_TAG|$(appVersion)|g"        $(Pipeline.Workspace)/k8s/blue-green.yaml
+                sed -i "s|BLUE_TAG|$CURRENT_BLUE|g"  $(Pipeline.Workspace)/k8s/blue-green.yaml
+                sed -i "s|IMAGE_TAG|$(appVersion)|g"  $(Pipeline.Workspace)/k8s/blue-green.yaml
 
-                echo "→ Imagens no blue-green.yaml após substituição:"
+                echo "→ Imagens após substituição:"
                 grep "image:" $(Pipeline.Workspace)/k8s/blue-green.yaml
 
           - task: AzureCLI@2
@@ -278,22 +274,32 @@ stages:
                   --name $(AKS_CLUSTER) \
                   --overwrite-existing
 
-                kubectl apply -f $(Pipeline.Workspace)/k8s/configmap.yaml    -n stable
-                kubectl apply -f $(Pipeline.Workspace)/k8s/blue-green.yaml   -n stable
+                kubectl apply -f $(Pipeline.Workspace)/k8s/configmap.yaml  -n stable
+                kubectl apply -f $(Pipeline.Workspace)/k8s/blue-green.yaml -n stable
 
-                echo "→ Aguardando Green subir..."
+                echo "→ Aguardando Blue estar pronto..."
+                kubectl rollout status deployment/pedidosapi-blue \
+                  -n stable --timeout=360s
+
+                echo "→ Aguardando Green estar pronto (sem tráfego ainda)..."
                 kubectl rollout status deployment/pedidosapi-green \
                   -n stable --timeout=360s
 
                 echo ""
                 echo "🔵 Blue  (versão atual) → tráfego 100%"
-                echo "🟢 Green (nova versão)  → pronto, aguardando switch"
+                echo "🟢 Green (nova versão)  → pronto, aguardando switch manual"
                 echo ""
-                echo "Para alternar o tráfego para Green execute:"
-                echo "kubectl patch svc pedidosapi-svc -n stable -p '{\"spec\":{\"selector\":{\"version\":\"green\"}}}'"
+                echo "Para expor o Green temporariamente (validação):"
+                echo "kubectl patch svc pedidosapi-green-svc -n stable -p '{\"spec\":{\"type\":\"LoadBalancer\"}}'"
+                echo ""
+                echo "Para alternar o tráfego para Green:"
+                echo "kubectl patch svc pedidosapi-svc -n stable -p '{\"spec\":{\"selector\":{\"app\":\"pedidosapi\",\"version\":\"green\"}}}'"
+                echo ""
+                echo "Para rollback instantâneo (voltar para Blue):"
+                echo "kubectl patch svc pedidosapi-svc -n stable -p '{\"spec\":{\"selector\":{\"app\":\"pedidosapi\",\"version\":\"blue\"}}}'"
 
           - task: AzureCLI@2
-            displayName: '4. Smoke test Green (sem tráfego ainda)'
+            displayName: '4. Smoke test Green (ClusterIP interno)'
             inputs:
               azureSubscription: 'sc-azure-pedidosapi'
               scriptType: bash
@@ -305,18 +311,19 @@ stages:
                   --overwrite-existing
 
                 sleep 10
-                # Smoke test via ClusterIP do Green (pedidosapi-green-svc)
                 GREEN_IP=$(kubectl get svc pedidosapi-green-svc -n stable \
                   -o jsonpath='{.spec.clusterIP}')
                 echo "Green ClusterIP: $GREEN_IP"
 
-                # Roda o teste dentro do cluster via pod temporário
                 kubectl run smoke-test --rm -i --restart=Never \
                   --image=curlimages/curl:latest -n stable -- \
                   curl -s -o /dev/null -w "%{http_code}" http://$GREEN_IP/info \
                   | grep -q "200" && echo "✅ Green OK — pronto para switch!" || exit 1
 
   # ── CANARY ────────────────────────────────────────────────
+  # Aplica canary.yaml — stable (90%) + canary (10%) do tráfego
+  # Stable = versão atual (obtida do cluster — sem fallback)
+  # Canary = nova versão (appVersion do CI)
   - deployment: DeployCanary
     displayName: 'Deploy Stable — Canary (10% tráfego)'
     condition: >
@@ -329,12 +336,18 @@ stages:
       runOnce:
         deploy:
           steps:
+          - script: echo "appVersion=$(appVersion)"
+            displayName: '0. Debug appVersion'
+
           - task: DownloadPipelineArtifact@2
             displayName: '1. Download manifests k8s'
             inputs:
               artifactName: 'k8s-manifests'
               targetPath: '$(Pipeline.Workspace)/k8s'
 
+          # Obtém a versão atual do Stable diretamente do cluster
+          # Stable sempre existe — sem fallback
+          # Validação garante que Stable e Canary são versões diferentes
           - task: AzureCLI@2
             displayName: '2. Substituir STABLE_TAG e IMAGE_TAG'
             inputs:
@@ -347,10 +360,21 @@ stages:
                   --name $(AKS_CLUSTER) \
                   --overwrite-existing
 
+                # Obtém a versão atual do Stable diretamente do cluster
                 CURRENT_STABLE=$(kubectl get deployment pedidosapi -n stable \
                   -o jsonpath='{.spec.template.spec.containers[0].image}' \
-                  2>/dev/null | cut -d: -f2 || echo "latest")
-                echo "→ Stable atual: $CURRENT_STABLE | Canary novo: $(appVersion)"
+                  | cut -d: -f2)
+
+                echo "→ Stable (atual): $CURRENT_STABLE"
+                echo "→ Canary (novo) : $(appVersion)"
+
+                # Validação — Stable e Canary não podem ser iguais
+                if [ "$CURRENT_STABLE" = "$(appVersion)" ]; then
+                  echo "❌ STABLE_TAG e IMAGE_TAG são iguais: $CURRENT_STABLE"
+                  echo "   Canary requer versões diferentes."
+                  echo "   Crie uma nova tag git antes de executar."
+                  exit 1
+                fi
 
                 sed -i "s|STABLE_TAG|$CURRENT_STABLE|g" $(Pipeline.Workspace)/k8s/canary.yaml
                 sed -i "s|IMAGE_TAG|$(appVersion)|g"     $(Pipeline.Workspace)/k8s/canary.yaml
@@ -379,13 +403,13 @@ stages:
 
                 echo ""
                 echo "📊 Distribuição de tráfego:"
-                kubectl get deployments -n stable | grep -E "pedidosapi|NAME"
+                kubectl get deployments -n stable | grep -E "NAME|pedidosapi"
                 echo ""
                 echo "Para promover canary para 100%:"
-                echo "kubectl scale deployment/pedidosapi --replicas=0 -n stable"
+                echo "kubectl scale deployment/pedidosapi        --replicas=0  -n stable"
                 echo "kubectl scale deployment/pedidosapi-canary --replicas=10 -n stable"
                 echo ""
-                echo "Para rollback do canary:"
+                echo "Para rollback do canary (zero downtime):"
                 echo "kubectl delete deployment pedidosapi-canary -n stable"
 
           - task: AzureCLI@2
