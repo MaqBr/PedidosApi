@@ -28,7 +28,7 @@ parameters:
 - name: deployStrategy
   displayName: 'Estratégia de Deploy (apenas Stable)'
   type: string
-  default: 'blue-green'
+  default: 'rolling'
   values:
   - rolling
   - blue-green
