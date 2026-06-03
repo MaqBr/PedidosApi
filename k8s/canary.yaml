@@ -2,8 +2,8 @@
 #  PedidosApi — Canary Release (Docker Hub)
 #
 #  Placeholders substituídos pela pipeline via sed:
-#    STABLE_TAG → versão atual em produção  ex: 1.0.9
-#    IMAGE_TAG  → nova versão canary        ex: 1.1.0
+#    STABLE_TAG → versão atual em produção  ex: 1.10.0
+#    IMAGE_TAG  → nova versão canary        ex: 1.11.0
 #
 #  Distribuição de tráfego:
 #    9 pods stable (STABLE_TAG) = 90% do tráfego
