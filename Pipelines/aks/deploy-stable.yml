@@ -1,0 +1,432 @@
+# ============================================================
+#  PedidosApi — Template Deploy Stable
+#  Namespace: stable | Aprovação dupla: Tech Lead + PM
+#
+#  Trigger: tag v*.*.* (sem sufixo alpha/beta/rc)
+#  Aprovação: Tech Lead + PM (configurado no Environment 'stable')
+#  Timeout rollout: 360s
+#
+#  Parâmetros:
+#    deployStrategy : rolling | blue-green | canary (default: rolling)
+#    rollbackTag    : tag da imagem ex: 1.0.9 (vazio = deploy normal)
+#
+#  Jobs exclusivos (apenas um executa por vez):
+#    RollbackStable  → rollbackTag preenchido
+#    DeployRolling   → deployStrategy = rolling
+#    DeployBlueGreen → deployStrategy = blue-green
+#    DeployCanary    → deployStrategy = canary
+# ============================================================
+parameters:
+- name: deployStrategy
+  type: string
+  default: 'blue-green'
+- name: rollbackTag
+  type: string
+  default: ''
+
+stages:
+- stage: DeployStable
+  displayName: 'Stable — Produção (aprovação dupla)'
+  dependsOn:
+  - CI
+  condition: >
+    and(
+      in(dependencies.CI.result, 'Succeeded', 'Skipped'),
+      or(
+        ne('${{ parameters.rollbackTag }}', ''),
+        and(
+          startsWith(variables['Build.SourceBranch'], 'refs/tags/v'),
+          not(contains(variables['Build.SourceBranch'], '-alpha.')),
+          not(contains(variables['Build.SourceBranch'], '-beta.')),
+          not(contains(variables['Build.SourceBranch'], '-rc.'))
+        )
+      )
+    )
+  variables:
+    appVersion: $[ stageDependencies.CI.BuildTestPush.outputs['versao.appVersion'] ]
+  jobs:
+
+  # ── ROLLBACK ──────────────────────────────────────────────
+  - deployment: RollbackStable
+    displayName: 'Rollback Stable → tag: ${{ parameters.rollbackTag }}'
+    condition: ne('${{ parameters.rollbackTag }}', '')
+    environment: 'stable'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: AzureCLI@2
+            displayName: '1. Rollback para tag ${{ parameters.rollbackTag }}'
+            inputs:
+              azureSubscription: 'sc-azure-pedidosapi'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az aks get-credentials \
+                  --resource-group $(AKS_RESOURCE_GROUP) \
+                  --name $(AKS_CLUSTER) \
+                  --overwrite-existing
+
+                ROLLBACK_TAG="${{ parameters.rollbackTag }}"
+                echo "⏪ Iniciando rollback para: $(DOCKERHUB_REPO):$ROLLBACK_TAG"
+
+                if docker manifest inspect $(DOCKERHUB_REPO):$ROLLBACK_TAG > /dev/null 2>&1; then
+                  echo "✅ Imagem encontrada no Docker Hub"
+                else
+                  echo "❌ Imagem $(DOCKERHUB_REPO):$ROLLBACK_TAG não encontrada!"
+                  exit 1
+                fi
+
+                kubectl set image deployment/$(K8S_DEPLOYMENT) \
+                  $(K8S_DEPLOYMENT)=$(DOCKERHUB_REPO):$ROLLBACK_TAG \
+                  -n stable
+
+                kubectl rollout status deployment/$(K8S_DEPLOYMENT) \
+                  -n stable --timeout=360s
+
+          - task: AzureCLI@2
+            displayName: '2. Smoke test pós-rollback'
+            inputs:
+              azureSubscription: 'sc-azure-pedidosapi'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az aks get-credentials \
+                  --resource-group $(AKS_RESOURCE_GROUP) \
+                  --name $(AKS_CLUSTER) \
+                  --overwrite-existing
+
+                sleep 10
+                SVC_IP=$(kubectl get svc pedidosapi-svc -n stable \
+                  -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+                STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://$SVC_IP/info)
+                echo "Smoke test pós-rollback: HTTP $STATUS"
+                [ "$STATUS" = "200" ] && echo "✅ Rollback concluído!" || exit 1
+
+          - script: |
+              echo "================================================"
+              echo " ⏪ ROLLBACK CONCLUÍDO"
+              echo " Versão restaurada : ${{ parameters.rollbackTag }}"
+              echo " Imagem            : $(DOCKERHUB_REPO):${{ parameters.rollbackTag }}"
+              echo " Namespace         : stable"
+              echo "================================================"
+            displayName: '3. Resumo do rollback'
+
+  # ── ROLLING ───────────────────────────────────────────────
+  - deployment: DeployRolling
+    displayName: 'Deploy Stable — Rolling Update'
+    condition: >
+      and(
+        eq('${{ parameters.rollbackTag }}', ''),
+        eq('${{ parameters.deployStrategy }}', 'rolling')
+      )
+    environment: 'stable'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - script: echo "appVersion=$(appVersion)"
+            displayName: '0. Debug appVersion'
+
+          - task: DownloadPipelineArtifact@2
+            displayName: '1. Download manifests k8s'
+            inputs:
+              artifactName: 'k8s-manifests'
+              targetPath: '$(Pipeline.Workspace)/k8s'
+
+          - task: AzureCLI@2
+            displayName: '2. Substituir placeholders nos manifests'
+            inputs:
+              azureSubscription: 'sc-azure-pedidosapi'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                sed -i "s|NAMESPACE_TAG|stable|g"       $(Pipeline.Workspace)/k8s/configmap.yaml
+                sed -i "s|NAMESPACE_TAG|stable|g"       $(Pipeline.Workspace)/k8s/deployment.yaml
+                sed -i "s|NAMESPACE_TAG|stable|g"       $(Pipeline.Workspace)/k8s/service.yaml
+                sed -i "s|NAMESPACE_TAG|stable|g"       $(Pipeline.Workspace)/k8s/hpa.yaml
+                sed -i "s|IMAGE_TAG|$(appVersion)|g"    $(Pipeline.Workspace)/k8s/deployment.yaml
+                sed -i "s|ENV_TAG|Stable|g"             $(Pipeline.Workspace)/k8s/configmap.yaml
+
+                grep "namespace:"  $(Pipeline.Workspace)/k8s/deployment.yaml
+                grep "image:"      $(Pipeline.Workspace)/k8s/deployment.yaml
+
+          - task: AzureCLI@2
+            displayName: '3. Apply Rolling + rollout (stable)'
+            inputs:
+              azureSubscription: 'sc-azure-pedidosapi'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az aks get-credentials \
+                  --resource-group $(AKS_RESOURCE_GROUP) \
+                  --name $(AKS_CLUSTER) \
+                  --overwrite-existing
+
+                kubectl apply -f $(Pipeline.Workspace)/k8s/configmap.yaml  -n stable
+                kubectl apply -f $(Pipeline.Workspace)/k8s/deployment.yaml -n stable
+                kubectl apply -f $(Pipeline.Workspace)/k8s/service.yaml    -n stable
+                kubectl apply -f $(Pipeline.Workspace)/k8s/hpa.yaml        -n stable
+
+                kubectl rollout status deployment/$(K8S_DEPLOYMENT) \
+                  -n stable --timeout=360s
+
+          - task: AzureCLI@2
+            displayName: '4. Smoke test Stable Rolling'
+            inputs:
+              azureSubscription: 'sc-azure-pedidosapi'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az aks get-credentials \
+                  --resource-group $(AKS_RESOURCE_GROUP) \
+                  --name $(AKS_CLUSTER) \
+                  --overwrite-existing
+
+                sleep 10
+                SVC_IP=$(kubectl get svc pedidosapi-svc -n stable \
+                  -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+                STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://$SVC_IP/info)
+                echo "Smoke test Stable Rolling: HTTP $STATUS"
+                [ "$STATUS" = "200" ] && echo "✅ Stable Rolling OK" || exit 1
+
+          - script: |
+              echo "================================================"
+              echo " ✅ DEPLOY ROLLING CONCLUÍDO"
+              echo " Versão  : $(appVersion)"
+              echo " Imagem  : $(DOCKERHUB_REPO):$(appVersion)"
+              echo " NS      : stable"
+              echo "================================================"
+            displayName: '5. Resumo do deploy'
+
+  # ── BLUE-GREEN ────────────────────────────────────────────
+  # Aplica blue-green.yaml — dois Deployments paralelos (blue e green)
+  # Blue = versão atual em produção (obtida do cluster)
+  # Green = nova versão (appVersion do CI)
+  # O Service aponta para 'blue' por padrão — switch manual após validação
+  - deployment: DeployBlueGreen
+    displayName: 'Deploy Stable — Blue-Green'
+    condition: >
+      and(
+        eq('${{ parameters.rollbackTag }}', ''),
+        eq('${{ parameters.deployStrategy }}', 'blue-green')
+      )
+    environment: 'stable'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - script: echo "appVersion=$(appVersion)"
+            displayName: '0. Debug appVersion'
+
+          - task: DownloadPipelineArtifact@2
+            displayName: '1. Download manifests k8s'
+            inputs:
+              artifactName: 'k8s-manifests'
+              targetPath: '$(Pipeline.Workspace)/k8s'
+
+          # Obtém a versão atual do Blue diretamente do cluster
+          # Blue sempre existe — sem fallback
+          # Validação garante que Blue e Green são versões diferentes
+          - task: AzureCLI@2
+            displayName: '2. Substituir BLUE_TAG e IMAGE_TAG'
+            inputs:
+              azureSubscription: 'sc-azure-pedidosapi'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az aks get-credentials \
+                  --resource-group $(AKS_RESOURCE_GROUP) \
+                  --name $(AKS_CLUSTER) \
+                  --overwrite-existing
+
+                # Obtém a versão atual do Blue diretamente do cluster
+                CURRENT_BLUE=$(kubectl get deployment pedidosapi-blue -n stable \
+                  -o jsonpath='{.spec.template.spec.containers[0].image}' \
+                  | cut -d: -f2)
+
+                echo "→ Blue (atual): $CURRENT_BLUE"
+                echo "→ Green (novo): $(appVersion)"
+
+                # Validação — Blue e Green não podem ser iguais
+                if [ "$CURRENT_BLUE" = "$(appVersion)" ]; then
+                  echo "❌ BLUE_TAG e IMAGE_TAG são iguais: $CURRENT_BLUE"
+                  echo "   Blue-Green requer versões diferentes."
+                  echo "   Crie uma nova tag git antes de executar."
+                  exit 1
+                fi
+
+                sed -i "s|BLUE_TAG|$CURRENT_BLUE|g"  $(Pipeline.Workspace)/k8s/blue-green.yaml
+                sed -i "s|IMAGE_TAG|$(appVersion)|g"  $(Pipeline.Workspace)/k8s/blue-green.yaml
+
+                echo "→ Imagens após substituição:"
+                grep "image:" $(Pipeline.Workspace)/k8s/blue-green.yaml
+
+          - task: AzureCLI@2
+            displayName: '3. Apply Blue-Green + aguardar Green'
+            inputs:
+              azureSubscription: 'sc-azure-pedidosapi'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az aks get-credentials \
+                  --resource-group $(AKS_RESOURCE_GROUP) \
+                  --name $(AKS_CLUSTER) \
+                  --overwrite-existing
+
+                kubectl apply -f $(Pipeline.Workspace)/k8s/configmap.yaml  -n stable
+                kubectl apply -f $(Pipeline.Workspace)/k8s/blue-green.yaml -n stable
+
+                echo "→ Aguardando Blue estar pronto..."
+                kubectl rollout status deployment/pedidosapi-blue \
+                  -n stable --timeout=360s
+
+                echo "→ Aguardando Green estar pronto (sem tráfego ainda)..."
+                kubectl rollout status deployment/pedidosapi-green \
+                  -n stable --timeout=360s
+
+                echo ""
+                echo "🔵 Blue  (versão atual) → tráfego 100%"
+                echo "🟢 Green (nova versão)  → pronto, aguardando switch manual"
+                echo ""
+                echo "Para expor o Green temporariamente (validação):"
+                echo "kubectl patch svc pedidosapi-green-svc -n stable -p '{\"spec\":{\"type\":\"LoadBalancer\"}}'"
+                echo ""
+                echo "Para alternar o tráfego para Green:"
+                echo "kubectl patch svc pedidosapi-svc -n stable -p '{\"spec\":{\"selector\":{\"app\":\"pedidosapi\",\"version\":\"green\"}}}'"
+                echo ""
+                echo "Para rollback instantâneo (voltar para Blue):"
+                echo "kubectl patch svc pedidosapi-svc -n stable -p '{\"spec\":{\"selector\":{\"app\":\"pedidosapi\",\"version\":\"blue\"}}}'"
+
+          - task: AzureCLI@2
+            displayName: '4. Smoke test Green (ClusterIP interno)'
+            inputs:
+              azureSubscription: 'sc-azure-pedidosapi'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az aks get-credentials \
+                  --resource-group $(AKS_RESOURCE_GROUP) \
+                  --name $(AKS_CLUSTER) \
+                  --overwrite-existing
+
+                sleep 10
+                GREEN_IP=$(kubectl get svc pedidosapi-green-svc -n stable \
+                  -o jsonpath='{.spec.clusterIP}')
+                echo "Green ClusterIP: $GREEN_IP"
+
+                kubectl run smoke-test --rm -i --restart=Never \
+                  --image=curlimages/curl:latest -n stable -- \
+                  curl -s -o /dev/null -w "%{http_code}" http://$GREEN_IP/info \
+                  | grep -q "200" && echo "✅ Green OK — pronto para switch!" || exit 1
+
+  # ── CANARY ────────────────────────────────────────────────
+  # Aplica canary.yaml — stable (90%) + canary (10%) do tráfego
+  # Stable = versão atual (obtida do cluster — sem fallback)
+  # Canary = nova versão (appVersion do CI)
+  - deployment: DeployCanary
+    displayName: 'Deploy Stable — Canary (10% tráfego)'
+    condition: >
+      and(
+        eq('${{ parameters.rollbackTag }}', ''),
+        eq('${{ parameters.deployStrategy }}', 'canary')
+      )
+    environment: 'stable'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - script: echo "appVersion=$(appVersion)"
+            displayName: '0. Debug appVersion'
+
+          - task: DownloadPipelineArtifact@2
+            displayName: '1. Download manifests k8s'
+            inputs:
+              artifactName: 'k8s-manifests'
+              targetPath: '$(Pipeline.Workspace)/k8s'
+
+          # Obtém a versão atual do Stable diretamente do cluster
+          # Stable sempre existe — sem fallback
+          # Validação garante que Stable e Canary são versões diferentes
+          - task: AzureCLI@2
+            displayName: '2. Substituir STABLE_TAG e IMAGE_TAG'
+            inputs:
+              azureSubscription: 'sc-azure-pedidosapi'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az aks get-credentials \
+                  --resource-group $(AKS_RESOURCE_GROUP) \
+                  --name $(AKS_CLUSTER) \
+                  --overwrite-existing
+
+                # Obtém a versão atual do Stable diretamente do cluster
+                CURRENT_STABLE=$(kubectl get deployment pedidosapi -n stable \
+                  -o jsonpath='{.spec.template.spec.containers[0].image}' \
+                  | cut -d: -f2)
+
+                echo "→ Stable (atual): $CURRENT_STABLE"
+                echo "→ Canary (novo) : $(appVersion)"
+
+                # Validação — Stable e Canary não podem ser iguais
+                if [ "$CURRENT_STABLE" = "$(appVersion)" ]; then
+                  echo "❌ STABLE_TAG e IMAGE_TAG são iguais: $CURRENT_STABLE"
+                  echo "   Canary requer versões diferentes."
+                  echo "   Crie uma nova tag git antes de executar."
+                  exit 1
+                fi
+
+                sed -i "s|STABLE_TAG|$CURRENT_STABLE|g" $(Pipeline.Workspace)/k8s/canary.yaml
+                sed -i "s|IMAGE_TAG|$(appVersion)|g"     $(Pipeline.Workspace)/k8s/canary.yaml
+
+                echo "→ Imagens após substituição:"
+                grep "image:" $(Pipeline.Workspace)/k8s/canary.yaml
+
+          - task: AzureCLI@2
+            displayName: '3. Apply Canary + aguardar pod canary'
+            inputs:
+              azureSubscription: 'sc-azure-pedidosapi'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az aks get-credentials \
+                  --resource-group $(AKS_RESOURCE_GROUP) \
+                  --name $(AKS_CLUSTER) \
+                  --overwrite-existing
+
+                kubectl apply -f $(Pipeline.Workspace)/k8s/configmap.yaml -n stable
+                kubectl apply -f $(Pipeline.Workspace)/k8s/canary.yaml    -n stable
+
+                echo "→ Aguardando pod canary subir..."
+                kubectl rollout status deployment/pedidosapi-canary \
+                  -n stable --timeout=360s
+
+                echo ""
+                echo "📊 Distribuição de tráfego:"
+                kubectl get deployments -n stable | grep -E "NAME|pedidosapi"
+                echo ""
+                echo "Para promover canary para 100%:"
+                echo "kubectl scale deployment/pedidosapi        --replicas=0  -n stable"
+                echo "kubectl scale deployment/pedidosapi-canary --replicas=10 -n stable"
+                echo ""
+                echo "Para rollback do canary (zero downtime):"
+                echo "kubectl delete deployment pedidosapi-canary -n stable"
+
+          - task: AzureCLI@2
+            displayName: '4. Smoke test Canary'
+            inputs:
+              azureSubscription: 'sc-azure-pedidosapi'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az aks get-credentials \
+                  --resource-group $(AKS_RESOURCE_GROUP) \
+                  --name $(AKS_CLUSTER) \
+                  --overwrite-existing
+
+                sleep 10
+                SVC_IP=$(kubectl get svc pedidosapi-svc -n stable \
+                  -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+                STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://$SVC_IP/info)
+                echo "Smoke test Canary: HTTP $STATUS"
+                [ "$STATUS" = "200" ] && echo "✅ Canary ativo — monitorar métricas!" || exit 1

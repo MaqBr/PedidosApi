@@ -92,6 +92,7 @@ stages:
         extraProperties: |
           sonar.cs.opencover.reportsPaths=$(Agent.TempDirectory)/**/coverage.opencover.xml
           sonar.exclusions=**/obj/**,**/bin/**
+          sonar.token=$(SONAR_TOKEN)
     - task: DotNetCoreCLI@2
       displayName: '5. Build'
       inputs:

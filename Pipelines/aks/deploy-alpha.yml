@@ -1,0 +1,106 @@
+# ============================================================
+#  PedidosApi — Template Deploy Alpha
+#  Namespace: alpha | Estratégia: Rolling Update | Deploy: automático
+#
+#  Trigger: push em main ou tag v*.*.*-alpha.*
+#  Aprovação: nenhuma — deploy automático
+#  Timeout rollout: 300s
+# ============================================================
+parameters:
+- name: rollbackTag
+  type: string
+  default: ''
+
+stages:
+- stage: DeployAlpha
+  displayName: 'Alpha — Deploy automático'
+  dependsOn: CI
+  condition: >
+    and(
+      succeeded(),
+      eq('${{ parameters.rollbackTag }}', ''),
+      or(
+        eq(variables['Build.SourceBranch'], 'refs/heads/main'),
+        contains(variables['Build.SourceBranch'], '-alpha.')
+      )
+    )
+  variables:
+    appVersion: $[ stageDependencies.CI.BuildTestPush.outputs['versao.appVersion'] ]
+  jobs:
+  - deployment: DeployAlpha
+    displayName: 'Deploy Alpha → AKS namespace: alpha'
+    environment: 'alpha'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - script: echo "appVersion=$(appVersion)"
+            displayName: '0. Debug appVersion'
+
+          - task: DownloadPipelineArtifact@2
+            displayName: '1. Download manifests k8s'
+            inputs:
+              artifactName: 'k8s-manifests'
+              targetPath: '$(Pipeline.Workspace)/k8s'
+
+          - task: AzureCLI@2
+            displayName: '2. Substituir placeholders nos manifests'
+            inputs:
+              azureSubscription: 'sc-azure-pedidosapi'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                echo "→ Substituindo placeholders para namespace: alpha"
+                sed -i "s|NAMESPACE_TAG|alpha|g"        $(Pipeline.Workspace)/k8s/configmap.yaml
+                sed -i "s|NAMESPACE_TAG|alpha|g"        $(Pipeline.Workspace)/k8s/deployment.yaml
+                sed -i "s|NAMESPACE_TAG|alpha|g"        $(Pipeline.Workspace)/k8s/service.yaml
+                sed -i "s|NAMESPACE_TAG|alpha|g"        $(Pipeline.Workspace)/k8s/hpa.yaml
+                sed -i "s|IMAGE_TAG|$(appVersion)|g"    $(Pipeline.Workspace)/k8s/deployment.yaml
+                sed -i "s|ENV_TAG|Alpha|g"              $(Pipeline.Workspace)/k8s/configmap.yaml
+
+                echo "→ Verificando substituições:"
+                grep "namespace:"             $(Pipeline.Workspace)/k8s/deployment.yaml
+                grep "image:"                 $(Pipeline.Workspace)/k8s/deployment.yaml
+                grep "ASPNETCORE_ENVIRONMENT" $(Pipeline.Workspace)/k8s/configmap.yaml
+
+          - task: AzureCLI@2
+            displayName: '3. Apply manifests + rollout (alpha)'
+            inputs:
+              azureSubscription: 'sc-azure-pedidosapi'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az aks get-credentials \
+                  --resource-group $(AKS_RESOURCE_GROUP) \
+                  --name $(AKS_CLUSTER) \
+                  --overwrite-existing
+
+                echo "→ Aplicando manifests em ordem no namespace alpha..."
+                kubectl apply -f $(Pipeline.Workspace)/k8s/configmap.yaml  -n alpha
+                kubectl apply -f $(Pipeline.Workspace)/k8s/deployment.yaml -n alpha
+                kubectl apply -f $(Pipeline.Workspace)/k8s/service.yaml    -n alpha
+                kubectl apply -f $(Pipeline.Workspace)/k8s/hpa.yaml        -n alpha
+
+                echo "→ Aguardando rollout..."
+                kubectl rollout status deployment/$(K8S_DEPLOYMENT) \
+                  -n alpha --timeout=300s
+
+          - task: AzureCLI@2
+            displayName: '4. Smoke test Alpha'
+            inputs:
+              azureSubscription: 'sc-azure-pedidosapi'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az aks get-credentials \
+                  --resource-group $(AKS_RESOURCE_GROUP) \
+                  --name $(AKS_CLUSTER) \
+                  --overwrite-existing
+
+                sleep 10
+                SVC_IP=$(kubectl get svc pedidosapi-svc -n alpha \
+                  -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+                echo "Service IP: $SVC_IP"
+                STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://$SVC_IP/info)
+                echo "Smoke test Alpha: HTTP $STATUS"
+                [ "$STATUS" = "200" ] && echo "✅ Alpha OK" || exit 1

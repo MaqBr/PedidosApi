@@ -1,0 +1,34 @@
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: pedidosapi-hpa
+  namespace: NAMESPACE_TAG
+  labels:
+    app: pedidosapi
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: pedidosapi
+  minReplicas: 6
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 30   # aguarda 30s antes de remover pods
+      policies:
+      - type: Pods
+        value: 2                        # remove 2 por vez
+        periodSeconds: 15               # a cada 15s
+    scaleUp:
+      stabilizationWindowSeconds: 0     # imediato
+      policies:
+      - type: Pods
+        value: 2                        # adiciona 2 por vez
+        periodSeconds: 15               # a cada 15s

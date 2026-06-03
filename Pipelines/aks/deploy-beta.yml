@@ -1,0 +1,103 @@
+# ============================================================
+#  PedidosApi — Template Deploy Beta
+#  Namespace: beta | Estratégia: Rolling Update | Deploy: automático
+#
+#  Trigger: tag v*.*.*-beta.*
+#  Aprovação: nenhuma — deploy automático
+#  Timeout rollout: 300s
+# ============================================================
+parameters:
+- name: rollbackTag
+  type: string
+  default: ''
+
+stages:
+- stage: DeployBeta
+  displayName: 'Beta — Deploy automático'
+  dependsOn: CI
+  condition: >
+    and(
+      succeeded(),
+      eq('${{ parameters.rollbackTag }}', ''),
+      contains(variables['Build.SourceBranch'], '-beta.')
+    )
+  variables:
+    appVersion: $[ stageDependencies.CI.BuildTestPush.outputs['versao.appVersion'] ]
+  jobs:
+  - deployment: DeployBeta
+    displayName: 'Deploy Beta → AKS namespace: beta'
+    environment: 'beta'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - script: echo "appVersion=$(appVersion)"
+            displayName: '0. Debug appVersion'
+
+          - task: DownloadPipelineArtifact@2
+            displayName: '1. Download manifests k8s'
+            inputs:
+              artifactName: 'k8s-manifests'
+              targetPath: '$(Pipeline.Workspace)/k8s'
+
+          - task: AzureCLI@2
+            displayName: '2. Substituir placeholders nos manifests'
+            inputs:
+              azureSubscription: 'sc-azure-pedidosapi'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                echo "→ Substituindo placeholders para namespace: beta"
+                sed -i "s|NAMESPACE_TAG|beta|g"         $(Pipeline.Workspace)/k8s/configmap.yaml
+                sed -i "s|NAMESPACE_TAG|beta|g"         $(Pipeline.Workspace)/k8s/deployment.yaml
+                sed -i "s|NAMESPACE_TAG|beta|g"         $(Pipeline.Workspace)/k8s/service.yaml
+                sed -i "s|NAMESPACE_TAG|beta|g"         $(Pipeline.Workspace)/k8s/hpa.yaml
+                sed -i "s|IMAGE_TAG|$(appVersion)|g"    $(Pipeline.Workspace)/k8s/deployment.yaml
+                sed -i "s|ENV_TAG|Beta|g"               $(Pipeline.Workspace)/k8s/configmap.yaml
+
+                echo "→ Verificando substituições:"
+                grep "namespace:"             $(Pipeline.Workspace)/k8s/deployment.yaml
+                grep "image:"                 $(Pipeline.Workspace)/k8s/deployment.yaml
+                grep "ASPNETCORE_ENVIRONMENT" $(Pipeline.Workspace)/k8s/configmap.yaml
+
+          - task: AzureCLI@2
+            displayName: '3. Apply manifests + rollout (beta)'
+            inputs:
+              azureSubscription: 'sc-azure-pedidosapi'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az aks get-credentials \
+                  --resource-group $(AKS_RESOURCE_GROUP) \
+                  --name $(AKS_CLUSTER) \
+                  --overwrite-existing
+
+                echo "→ Aplicando manifests em ordem no namespace beta..."
+                kubectl apply -f $(Pipeline.Workspace)/k8s/configmap.yaml  -n beta
+                kubectl apply -f $(Pipeline.Workspace)/k8s/deployment.yaml -n beta
+                kubectl apply -f $(Pipeline.Workspace)/k8s/service.yaml    -n beta
+                kubectl apply -f $(Pipeline.Workspace)/k8s/hpa.yaml        -n beta
+
+                echo "→ Aguardando rollout..."
+                kubectl rollout status deployment/$(K8S_DEPLOYMENT) \
+                  -n beta --timeout=300s
+
+          - task: AzureCLI@2
+            displayName: '4. Smoke test Beta'
+            inputs:
+              azureSubscription: 'sc-azure-pedidosapi'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az aks get-credentials \
+                  --resource-group $(AKS_RESOURCE_GROUP) \
+                  --name $(AKS_CLUSTER) \
+                  --overwrite-existing
+
+                sleep 10
+                SVC_IP=$(kubectl get svc pedidosapi-svc -n beta \
+                  -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+                echo "Service IP: $SVC_IP"
+                STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://$SVC_IP/info)
+                echo "Smoke test Beta: HTTP $STATUS"
+                [ "$STATUS" = "200" ] && echo "✅ Beta OK" || exit 1

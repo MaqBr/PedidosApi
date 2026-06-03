@@ -1,0 +1,140 @@
+# ============================================================
+#  PedidosApi — Blue-Green Deployment (Docker Hub)
+#
+#  Placeholders substituídos pela pipeline via sed:
+#    BLUE_TAG  → versão atual em produção  ex: 1.8.0
+#    IMAGE_TAG → nova versão (Green)       ex: 1.9.0
+#
+#  Fluxo:
+#    1. Pipeline aplica este arquivo com as tags substituídas
+#    2. Blue continua recebendo 100% do tráfego
+#    3. Green sobe com a nova versão (zero tráfego ainda)
+#    4. Validação do Green via pedidosapi-green-svc (ClusterIP)
+#    5. Switch manual: kubectl patch svc pedidosapi-svc → selector: green
+#    6. Rollback: kubectl patch svc pedidosapi-svc → selector: blue
+# ============================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pedidosapi-blue
+  namespace: stable
+  labels:
+    app: pedidosapi
+    version: blue
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: pedidosapi
+      version: blue
+  template:
+    metadata:
+      labels:
+        app: pedidosapi
+        version: blue
+    spec:
+      imagePullSecrets:
+      - name: dockerhub-secret
+      containers:
+      - name: pedidosapi
+        image: maqbrdevops/pedidosapi:BLUE_TAG    # ← versão atual (não alterada pelo deploy)
+        ports:
+        - containerPort: 8080
+        envFrom:
+        - configMapRef:
+            name: pedidosapi-config
+        - secretRef:
+            name: pedidosapi-secret
+        resources:
+          requests:
+            cpu: "10m"
+            memory: "32Mi"
+          limits:
+            cpu: "100m"
+            memory: "64Mi"
+        readinessProbe:
+          httpGet:
+            path: /info
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 5
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pedidosapi-green
+  namespace: stable
+  labels:
+    app: pedidosapi
+    version: green
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: pedidosapi
+      version: green
+  template:
+    metadata:
+      labels:
+        app: pedidosapi
+        version: green
+    spec:
+      imagePullSecrets:
+      - name: dockerhub-secret
+      containers:
+      - name: pedidosapi
+        image: maqbrdevops/pedidosapi:IMAGE_TAG    # ← nova versão (substituída pela pipeline)
+        ports:
+        - containerPort: 8080
+        envFrom:
+        - configMapRef:
+            name: pedidosapi-config
+        - secretRef:
+            name: pedidosapi-secret
+        resources:
+          requests:
+            cpu: "10m"
+            memory: "32Mi"
+          limits:
+            cpu: "100m"
+            memory: "64Mi"
+        readinessProbe:
+          httpGet:
+            path: /info
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 5
+---
+# Service público — aponta para Blue por padrão
+# Switch para Green: kubectl patch svc pedidosapi-svc -n stable
+#   -p '{"spec":{"selector":{"version":"green"}}}'
+apiVersion: v1
+kind: Service
+metadata:
+  name: pedidosapi-svc
+  namespace: stable
+  labels:
+    app: pedidosapi
+spec:
+  type: LoadBalancer
+  selector:
+    app: pedidosapi
+    version: blue    # ← aponta para Blue (tráfego 100%)
+  ports:
+  - port: 80
+    targetPort: 8080
+---
+# Service interno para validar o Green antes do switch
+apiVersion: v1
+kind: Service
+metadata:
+  name: pedidosapi-green-svc
+  namespace: stable
+spec:
+  type: ClusterIP
+  selector:
+    app: pedidosapi
+    version: green
+  ports:
+  - port: 80
+    targetPort: 8080

@@ -1,0 +1,90 @@
+# ============================================================
+#  PedidosApi — Pipeline CI/CD com Docker Hub + AKS — GitOps
+#  Refatorada com Templates (Boas Práticas)
+#
+#  Estrutura de arquivos:
+#    azure-pipelines-aks.yml  ← orquestrador (este arquivo)
+#    Pipeline/aks
+#      ci.yml                 ← stage CI: build, test, push Docker Hub
+#      deploy-alpha.yml       ← stage Deploy Alpha
+#      deploy-beta.yml        ← stage Deploy Beta
+#      deploy-rc.yml          ← stage Deploy RC (aprovação: Tech Lead)
+#      deploy-stable.yml      ← stage Deploy Stable (rolling/blue-green/canary + rollback)
+#
+#  Vantagens dos templates:
+#    - Arquivo principal legível em ~50 linhas
+#    - Cada ambiente isolado em seu próprio arquivo
+#    - Fácil manutenção — mudança em um ambiente não afeta os outros
+#    - Reutilização — mesmo padrão de steps em todos os ambientes
+#
+#  Triggers por tag SemVer:
+#    v*.*.*-alpha.*  → CI + Deploy Alpha
+#    v*.*.*-beta.*   → CI + Deploy Beta
+#    v*.*.*-rc.*     → CI + Deploy RC
+#    v*.*.*          → CI + Deploy Stable
+# ============================================================
+
+parameters:
+- name: deployStrategy
+  displayName: 'Estratégia de Deploy (apenas Stable)'
+  type: string
+  default: 'canary'
+  values:
+  - rolling
+  - blue-green
+  - canary
+
+- name: rollbackTag
+  displayName: 'Rollback para tag (ex: 1.0.9) — deixe vazio para deploy normal'
+  type: string
+  default: ''
+
+trigger:
+  branches:
+    include:
+      - main
+      - 'feat/*'
+      - 'fix/*'
+  tags:
+    include:
+      - 'v*.*.*'
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  buildConfiguration: 'Release'
+  dotnetVersion:      '10.x'
+  DOCKERHUB_REPO:     'maqbrdevops/pedidosapi'
+  AKS_RESOURCE_GROUP: 'DefaultResourceGroup-CCAN'
+  AKS_CLUSTER:        'aks-pedidosapi-curso'
+  K8S_MANIFESTS_DIR:  'k8s'
+  K8S_DEPLOYMENT:     'pedidosapi'
+
+stages:
+
+# ── CI ────────────────────────────────────────────────────────
+- template: ci.yml
+  parameters:
+    rollbackTag: ${{ parameters.rollbackTag }}
+
+# ── ALPHA ─────────────────────────────────────────────────────
+- template: deploy-alpha.yml
+  parameters:
+    rollbackTag: ${{ parameters.rollbackTag }}
+
+# ── BETA ──────────────────────────────────────────────────────
+- template: deploy-beta.yml
+  parameters:
+    rollbackTag: ${{ parameters.rollbackTag }}
+
+# ── RC ────────────────────────────────────────────────────────
+- template: deploy-rc.yml
+  parameters:
+    rollbackTag: ${{ parameters.rollbackTag }}
+
+# ── STABLE ────────────────────────────────────────────────────
+- template: deploy-stable.yml
+  parameters:
+    deployStrategy: ${{ parameters.deployStrategy }}
+    rollbackTag:    ${{ parameters.rollbackTag }}
